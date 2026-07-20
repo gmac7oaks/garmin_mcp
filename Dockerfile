@@ -1,4 +1,4 @@
-# Use Python 3.12 slim image for smaller size
+that # Use Python 3.12 slim image for smaller size
 FROM python:3.12-slim
 
 # Note: .dockerignore is symlinked to .gitignore for unified exclusion rules
@@ -37,7 +37,9 @@ RUN mkdir -p /root/.garminconnect && \
 # EXPOSE 8000
 
 # Set the entrypoint to run the MCP server
-ENTRYPOINT ["garmin-mcp"]
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Health check (optional - adjust based on your needs)
 # HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
