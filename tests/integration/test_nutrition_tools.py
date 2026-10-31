@@ -868,6 +868,17 @@ _CURRENT_SETTINGS = {
     "userDefinedActiveCalories": False,
     "calorieGoal": 1800,
     "macroGoals": {"carbs": 185.0, "fat": 52.0, "protein": 149.0},
+    # Micronutrients without a goal come back with no goalValue at all.
+    "micronutrientsSettings": {
+        "isTrackingEnabled": True,
+        "micronutrients": [
+            {"name": "Fiber", "key": "fiber", "unit": "g", "goalValue": 30.0, "enabled": True, "displayOrder": 0},
+            {"name": "Added Sugar", "key": "addedSugars", "unit": "g", "goalValue": 36.0, "enabled": True, "displayOrder": 1},
+            {"name": "Saturated Fat", "key": "saturatedFat", "unit": "g", "goalValue": 22.0, "enabled": True, "displayOrder": 2},
+            {"name": "Iron", "key": "iron", "unit": "mg", "enabled": False, "displayOrder": 3},
+            {"name": "Calcium", "key": "calcium", "unit": "mg", "enabled": False, "displayOrder": 4},
+        ],
+    },
     "effectiveDate": "2026-10-31",
     "nutritionStatus": "ACTIVE",
 }
@@ -877,6 +888,14 @@ def _settings(**overrides):
     data = deepcopy(_CURRENT_SETTINGS)
     data.update(overrides)
     return data
+
+
+def _micronutrients(**changes):
+    """_CURRENT_SETTINGS' micronutrient block with some entries' fields changed."""
+    micro = deepcopy(_CURRENT_SETTINGS["micronutrientsSettings"])
+    for item in micro["micronutrients"]:
+        item.update(changes.get(item["key"], {}))
+    return micro
 
 
 @pytest.mark.asyncio
@@ -907,6 +926,86 @@ async def test_set_nutrition_daily_settings_updates_all_fields(app_with_nutritio
     # The daily-burn baseline is not touched any more
     assert sent["activeDailyCalories"] == 2300
     assert "activeDailyCarbohydrateGrams" not in sent
+    # Micronutrients without a goal are left out (Garmin's PUT rejects a null
+    # goalValue); the ones with goals and the tracking switch go back as read.
+    sent_micros = sent["micronutrientsSettings"]
+    assert sent_micros["isTrackingEnabled"] is True
+    assert [m["key"] for m in sent_micros["micronutrients"]] == ["fiber", "addedSugars", "saturatedFat"]
+    assert all(m.get("goalValue") is not None for m in sent_micros["micronutrients"])
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_without_micronutrients(app_with_nutrition, mock_garmin_client):
+    """Settings with no micronutrient block are written back unchanged apart from the goals."""
+    before = _settings()
+    del before["micronutrientsSettings"]
+    stored = deepcopy(before)
+    stored["calorieGoal"] = 2300
+    mock_garmin_client.connectapi.side_effect = [before, stored]
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "updated"
+    assert "warning" not in data
+    assert "micronutrientsSettings" not in mock_garmin_client.client.put.call_args.kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_enabled_micronutrient_without_goal(app_with_nutrition, mock_garmin_client):
+    """A tracked micronutrient with no goal can't be written back, so nothing is sent."""
+    mock_garmin_client.connectapi.return_value = _settings(
+        micronutrientsSettings=_micronutrients(iron={"enabled": True})
+    )
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    assert "Iron" in result[0][0].text
+    assert "Could not update" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_warns_if_micronutrients_change(app_with_nutrition, mock_garmin_client):
+    """If the write changes the tracked micronutrients, the result says so."""
+    stored = _settings(
+        calorieGoal=2300,
+        micronutrientsSettings=_micronutrients(fiber={"goalValue": 25.0}),
+    )
+    mock_garmin_client.connectapi.side_effect = [_settings(), stored]
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "updated"
+    assert "Micronutrient settings changed" in data["warning"]
+    assert "'fiber': 30.0" in data["warning"] and "'fiber': 25.0" in data["warning"]
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_ignores_dropped_disabled_micronutrients(app_with_nutrition, mock_garmin_client):
+    """Disabled, goal-less entries missing from the read-back are not reported as a change."""
+    stored = _settings(calorieGoal=2300)
+    stored["micronutrientsSettings"]["micronutrients"] = stored["micronutrientsSettings"]["micronutrients"][:3]
+    mock_garmin_client.connectapi.side_effect = [_settings(), stored]
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "updated"
+    assert "warning" not in data
 
 
 @pytest.mark.asyncio
