@@ -5,6 +5,8 @@ Tests tools from:
 - nutrition (8 tools: 5 read + 2 write + 1 metadata)
 """
 import json
+from copy import deepcopy
+
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -857,61 +859,165 @@ async def test_delete_food_log_accepts_hex_uuid(app_with_nutrition, mock_garmin_
 
 # set_nutrition_daily_settings tests
 
+# Shape of a real GET /nutrition-service/settings/{date} response (trimmed).
 _CURRENT_SETTINGS = {
-    "activeDailyCalories": 2000,
-    "activeDailyCarbohydrateGrams": 250,
-    "activeDailyFatGrams": 65,
-    "activeDailyProteinGrams": 120,
-    "planDate": "2024-01-15",
+    "weightChangeType": "LOSS",
+    "targetDate": "2027-03-18",
+    "weightChangeRate": 500,
+    "activeDailyCalories": 2300,
+    "userDefinedActiveCalories": False,
+    "calorieGoal": 1800,
+    "macroGoals": {"carbs": 185.0, "fat": 52.0, "protein": 149.0},
+    "effectiveDate": "2026-10-31",
+    "nutritionStatus": "ACTIVE",
 }
+
+
+def _settings(**overrides):
+    data = deepcopy(_CURRENT_SETTINGS)
+    data.update(overrides)
+    return data
 
 
 @pytest.mark.asyncio
 async def test_set_nutrition_daily_settings_updates_all_fields(app_with_nutrition, mock_garmin_client):
-    """All four fields are updated and the merged payload is PUT back."""
-    mock_garmin_client.connectapi.return_value = dict(_CURRENT_SETTINGS)
-    mock_garmin_client.client.put.return_value = {
-        "activeDailyCalories": 1800,
-        "activeDailyCarbohydrateGrams": 200,
-        "activeDailyFatGrams": 60,
-        "activeDailyProteinGrams": 140,
-    }
+    """Writes calorieGoal and macroGoals, then confirms them from a read-back."""
+    stored = _settings(calorieGoal=2300, macroGoals={"carbs": 225.0, "fat": 80.0, "protein": 170.0})
+    mock_garmin_client.connectapi.side_effect = [_settings(), stored]
+    mock_garmin_client.client.put.return_value = None
 
     result = await app_with_nutrition.call_tool(
         "set_nutrition_daily_settings",
-        {"date": "2024-01-15", "calorie_goal": 1800, "carbs_grams": 200, "fat_grams": 60, "protein_grams": 140},
+        {"date": "2026-10-31", "calorie_goal": 2300, "carbs_grams": 225, "fat_grams": 80, "protein_grams": 170},
     )
 
     data = json.loads(result[0][0].text)
     assert data["status"] == "updated"
-    assert data["calorie_goal"] == 1800
-    assert data["carbs_grams"] == 200
-    assert data["fat_grams"] == 60
-    assert data["protein_grams"] == 140
-    # Verify the PUT was called with the merged payload
+    assert data["calorie_goal"] == 2300
+    assert data["carbs_grams"] == 225
+    assert data["fat_grams"] == 80
+    assert data["protein_grams"] == 170
+    assert data["weight_goal_type"] == "LOSS"
+    assert "warning" not in data
     put_call = mock_garmin_client.client.put.call_args
-    assert put_call.args[1] == "/nutrition-service/settings/2024-01-15"
-    assert put_call.kwargs["json"]["activeDailyCalories"] == 1800
+    assert put_call.args[1] == "/nutrition-service/settings/2026-10-31"
+    sent = put_call.kwargs["json"]
+    assert sent["calorieGoal"] == 2300
+    assert sent["macroGoals"] == {"carbs": 225, "fat": 80, "protein": 170}
+    # The daily-burn baseline is not touched any more
+    assert sent["activeDailyCalories"] == 2300
+    assert "activeDailyCarbohydrateGrams" not in sent
 
 
 @pytest.mark.asyncio
 async def test_set_nutrition_daily_settings_partial_update(app_with_nutrition, mock_garmin_client):
-    """Only the supplied fields are changed; others keep their existing values."""
-    mock_garmin_client.connectapi.return_value = dict(_CURRENT_SETTINGS)
-    mock_garmin_client.client.put.return_value = None  # some endpoints return nothing
+    """Only the supplied fields are changed; other macros keep their values."""
+    stored = _settings(macroGoals={"carbs": 185.0, "fat": 52.0, "protein": 170.0})
+    mock_garmin_client.connectapi.side_effect = [_settings(), stored]
 
     result = await app_with_nutrition.call_tool(
         "set_nutrition_daily_settings",
-        {"date": "2024-01-15", "calorie_goal": 1900},
+        {"date": "2026-10-31", "protein_grams": 170},
     )
 
     data = json.loads(result[0][0].text)
     assert data["status"] == "updated"
-    assert data["calorie_goal"] == 1900
-    # Unchanged fields come back from the merged current settings (since resp=None)
-    assert data["carbs_grams"] == _CURRENT_SETTINGS["activeDailyCarbohydrateGrams"]
-    put_call = mock_garmin_client.client.put.call_args
-    assert put_call.kwargs["json"]["activeDailyCarbohydrateGrams"] == 250
+    assert data["protein_grams"] == 170
+    assert data["carbs_grams"] == 185.0
+    sent = mock_garmin_client.client.put.call_args.kwargs["json"]
+    assert sent["macroGoals"] == {"carbs": 185.0, "fat": 52.0, "protein": 170}
+    assert sent["calorieGoal"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_reports_when_garmin_recalculates(app_with_nutrition, mock_garmin_client):
+    """If Garmin keeps different goals, say so instead of claiming success."""
+    mock_garmin_client.connectapi.side_effect = [_settings(), _settings()]
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "not_applied"
+    assert "calories 1800 (asked 2300)" in data["warning"]
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_falls_back_to_put_response(app_with_nutrition, mock_garmin_client):
+    """When the read-back fails, the PUT response body is used to confirm."""
+    stored = _settings(calorieGoal=2300)
+    mock_garmin_client.connectapi.side_effect = [_settings(), Exception("timeout")]
+    mock_garmin_client.client.put.return_value = stored
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "updated"
+    assert data["calorie_goal"] == 2300
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_does_not_mutate_read(app_with_nutrition, mock_garmin_client):
+    """The object returned by the GET is copied, not edited in place."""
+    original = _settings()
+    mock_garmin_client.connectapi.side_effect = [original, _settings(calorieGoal=2000)]
+
+    await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2000, "carbs_grams": 200},
+    )
+
+    assert original["calorieGoal"] == 1800
+    assert original["macroGoals"]["carbs"] == 185.0
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_expired_target_date(app_with_nutrition, mock_garmin_client):
+    """A weight-goal target date on or before the day blocks the update with a clear message."""
+    mock_garmin_client.connectapi.return_value = _settings(targetDate="2026-10-01")
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300},
+    )
+
+    assert "target date (2026-10-01) is not after 2026-10-31" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_moves_target_date(app_with_nutrition, mock_garmin_client):
+    """target_date replaces the stored weight-goal target date in the PUT."""
+    stored = _settings(targetDate="2027-06-30", calorieGoal=2300)
+    mock_garmin_client.connectapi.side_effect = [_settings(targetDate="2026-10-01"), stored]
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300, "target_date": "2027-06-30"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["weight_goal_target_date"] == "2027-06-30"
+    assert mock_garmin_client.client.put.call_args.kwargs["json"]["targetDate"] == "2027-06-30"
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_rejects_bad_target_date(app_with_nutrition, mock_garmin_client):
+    """target_date must be after the day being written."""
+    mock_garmin_client.connectapi.return_value = _settings()
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2026-10-31", "calorie_goal": 2300, "target_date": "2026-10-31"},
+    )
+
+    assert "must be after 2026-10-31" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -922,6 +1028,17 @@ async def test_set_nutrition_daily_settings_no_fields_provided(app_with_nutritio
         {"date": "2024-01-15"},
     )
     assert "No fields to update" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_invalid_date(app_with_nutrition, mock_garmin_client):
+    """A malformed date is rejected before any request is made."""
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "31/10/2026", "calorie_goal": 2300},
+    )
+    assert "Invalid date" in result[0][0].text
     mock_garmin_client.connectapi.assert_not_called()
 
 
@@ -941,12 +1058,12 @@ async def test_set_nutrition_daily_settings_no_current_data(app_with_nutrition, 
 @pytest.mark.asyncio
 async def test_set_nutrition_daily_settings_api_error(app_with_nutrition, mock_garmin_client):
     """API errors are surfaced as a clean message."""
-    mock_garmin_client.connectapi.return_value = dict(_CURRENT_SETTINGS)
+    mock_garmin_client.connectapi.return_value = _settings()
     mock_garmin_client.client.put.side_effect = Exception("403 Forbidden")
 
     result = await app_with_nutrition.call_tool(
         "set_nutrition_daily_settings",
-        {"date": "2024-01-15", "calorie_goal": 1800},
+        {"date": "2026-10-31", "calorie_goal": 1800},
     )
     assert "Error updating nutrition settings" in result[0][0].text
     assert "403" in result[0][0].text
