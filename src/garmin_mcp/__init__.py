@@ -260,13 +260,20 @@ def init_api(email, password):
             sys.stderr = old_stderr
             sys.stdout = old_stdout
 
-    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
+    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError) as err:
         # Session is expired. You'll need to log in again
+        # Say why, so a rejected token can be told apart from a missing one.
+        cause = f" ({err.__cause__})" if err.__cause__ else ""
+        print(
+            f"Token login failed: {type(err).__name__}: {err}{cause}\n",
+            file=sys.stderr,
+        )
 
         # Check if we're in a non-interactive environment without credentials
         if not is_interactive_terminal() and (not email or not password):
             print(
-                "ERROR: OAuth tokens not found and no interactive terminal available.\n"
+                "ERROR: OAuth tokens not found or no longer accepted by Garmin, "
+                "and no interactive terminal available.\n"
                 "Please authenticate first:\n"
                 "  1. Run: garmin-mcp-auth\n"
                 "  2. Enter your credentials and MFA code\n"
