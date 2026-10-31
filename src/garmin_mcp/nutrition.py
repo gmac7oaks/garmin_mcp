@@ -27,6 +27,25 @@ def configure(client):
     garmin_client = client
 
 
+def _micronutrient_items(settings) -> list:
+    """The micronutrient entries in a nutrition settings object ([] if none)."""
+    micro = settings.get("micronutrientsSettings") if isinstance(settings, dict) else None
+    items = micro.get("micronutrients") if isinstance(micro, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _tracked_micronutrients(settings) -> tuple:
+    """Tracking switch plus each enabled micronutrient's goal, for before/after checks."""
+    micro = settings.get("micronutrientsSettings") if isinstance(settings, dict) else None
+    tracking = micro.get("isTrackingEnabled") if isinstance(micro, dict) else None
+    enabled = {
+        item.get("key"): item.get("goalValue")
+        for item in _micronutrient_items(settings)
+        if isinstance(item, dict) and item.get("enabled")
+    }
+    return tracking, enabled
+
+
 def register_tools(app):
     """Register all nutrition tools with the MCP server app"""
 
@@ -162,6 +181,24 @@ def register_tools(app):
                             f"Garmin Connect app."
                         )
 
+            # Garmin's GET leaves goalValue out for micronutrients that have no
+            # goal (ones that aren't switched on), but its PUT rejects any
+            # micronutrient without a goalValue. Leave those out of the write.
+            micros_before = _tracked_micronutrients(current)
+            items = _micronutrient_items(current)
+            no_goal = [i for i in items if isinstance(i, dict) and i.get("goalValue") is None]
+            enabled_no_goal = [str(i.get("name") or i.get("key")) for i in no_goal if i.get("enabled")]
+            if enabled_no_goal:
+                return (
+                    "Could not update: Garmin has micronutrient tracking on for "
+                    f"{', '.join(enabled_no_goal)} without a goal, and rejects settings "
+                    "like that. Set a goal for it in the Garmin Connect app, then try again."
+                )
+            if no_goal:
+                current["micronutrientsSettings"]["micronutrients"] = [
+                    i for i in items if not any(i is n for n in no_goal)
+                ]
+
             if calorie_goal is not None:
                 current["calorieGoal"] = calorie_goal
             macro_overrides = {"carbs": carbs_grams, "fat": fat_grams, "protein": protein_grams}
@@ -181,7 +218,8 @@ def register_tools(app):
                 stored = garmin_client.connectapi(url)
             except Exception:
                 stored = None
-            if not isinstance(stored, dict) or not stored:
+            read_back = isinstance(stored, dict) and bool(stored)
+            if not read_back:
                 stored = resp if isinstance(resp, dict) and resp else None
             if stored is None:
                 return "Nutrition update submitted, but could not read back the stored settings to confirm it."
@@ -211,12 +249,23 @@ def register_tools(app):
                 "weight_goal_type": stored.get("weightChangeType"),
                 "weight_goal_target_date": stored.get("targetDate"),
             }
+            warnings = []
             if mismatches:
-                out["warning"] = (
+                warnings.append(
                     "Garmin stored different goals from the ones requested: "
                     + "; ".join(mismatches)
                     + ". It may be recalculating them from the weight goal set in the Garmin Connect app."
                 )
+            if read_back and _tracked_micronutrients(stored) != micros_before:
+                tracking, enabled = _tracked_micronutrients(stored)
+                was_tracking, was_enabled = micros_before
+                warnings.append(
+                    "Micronutrient settings changed after the update: tracking "
+                    f"{was_tracking} -> {tracking}, goals {was_enabled} -> {enabled}. "
+                    "Check them in the Garmin Connect app."
+                )
+            if warnings:
+                out["warning"] = " ".join(warnings)
             return json.dumps(out, indent=2)
         except Exception as e:
             return f"Error updating nutrition settings: {str(e)}"
