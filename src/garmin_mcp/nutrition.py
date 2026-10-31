@@ -1,7 +1,9 @@
 """
 Nutrition/food logging functions for Garmin Connect MCP Server
 """
+import datetime
 import json
+from copy import deepcopy
 from typing import Optional
 from urllib.parse import quote
 
@@ -93,16 +95,22 @@ def register_tools(app):
         carbs_grams: Optional[int] = None,
         fat_grams: Optional[int] = None,
         protein_grams: Optional[int] = None,
+        target_date: Optional[str] = None,
     ) -> str:
         """Update daily nutrition goals (calorie target and macronutrient targets).
 
-        Reads the current settings for the date, applies the supplied overrides,
-        and writes the merged result back.  Only the fields you provide are
-        changed; omitted fields keep their existing values.
+        Reads the current settings for the date, applies the supplied overrides
+        to Garmin's goal fields (calorieGoal and macroGoals), writes the whole
+        object back, then reads the settings again to confirm what Garmin
+        stored. Only the fields you provide are changed; omitted fields keep
+        their existing values. If Garmin stored something different from what
+        was asked, the result includes a "warning" saying so.
 
-        Garmin stores macros as grams.  The calorie goal should match
-        4*carbs + 4*protein + 9*fat to within a small rounding margin — Garmin
-        accepts minor mismatches but will silently correct large discrepancies.
+        This does not change the weight goal itself (lose / maintain / gain,
+        rate, target weight); that stays as set in the Garmin Connect app and is
+        reported back as weight_goal_type.
+
+        Macros are grams. Keep calorie_goal close to 4*carbs + 4*protein + 9*fat.
 
         Args:
             date: Date in YYYY-MM-DD format (settings are typically set once and
@@ -111,32 +119,105 @@ def register_tools(app):
             carbs_grams: Daily carbohydrate target in grams
             fat_grams: Daily fat target in grams
             protein_grams: Daily protein target in grams
+            target_date: Optional new target date (YYYY-MM-DD) for the weight
+                  goal stored in the same settings object. Garmin rejects the
+                  whole update if the stored target date is not after `date`,
+                  so pass this only in that case; it must be after `date`.
         """
         if all(v is None for v in (calorie_goal, carbs_grams, fat_grams, protein_grams)):
             return "No fields to update — supply at least one of calorie_goal, carbs_grams, fat_grams, protein_grams."
         try:
+            day = datetime.date.fromisoformat(date)
+        except ValueError:
+            return f"Invalid date {date!r} — use YYYY-MM-DD."
+        try:
             url = f"/nutrition-service/settings/{date}"
             current = garmin_client.connectapi(url)
-            if not current:
+            if not current or not isinstance(current, dict):
                 return f"Could not read current nutrition settings for {date} — cannot apply update."
+            current = deepcopy(current)
+
+            # The settings object carries the weight goal's target date, and
+            # Garmin refuses the whole PUT unless it is after the day written.
+            if target_date is not None:
+                try:
+                    new_target = datetime.date.fromisoformat(target_date)
+                except ValueError:
+                    return f"Invalid target_date {target_date!r} — use YYYY-MM-DD."
+                if new_target <= day:
+                    return f"target_date ({target_date}) must be after {date}."
+                current["targetDate"] = target_date
+            else:
+                stored_target = current.get("targetDate")
+                if stored_target:
+                    try:
+                        stored_day = datetime.date.fromisoformat(str(stored_target)[:10])
+                    except ValueError:
+                        stored_day = None
+                    if stored_day is not None and stored_day <= day:
+                        return (
+                            f"Garmin will reject this update: the weight goal's target date "
+                            f"({stored_target}) is not after {date}. Pass target_date "
+                            f"(YYYY-MM-DD, after {date}) or change the weight goal in the "
+                            f"Garmin Connect app."
+                        )
+
             if calorie_goal is not None:
-                current["activeDailyCalories"] = calorie_goal
-            if carbs_grams is not None:
-                current["activeDailyCarbohydrateGrams"] = carbs_grams
-            if fat_grams is not None:
-                current["activeDailyFatGrams"] = fat_grams
-            if protein_grams is not None:
-                current["activeDailyProteinGrams"] = protein_grams
+                current["calorieGoal"] = calorie_goal
+            macro_overrides = {"carbs": carbs_grams, "fat": fat_grams, "protein": protein_grams}
+            if any(v is not None for v in macro_overrides.values()):
+                macros = current.get("macroGoals")
+                if macros is None:
+                    macros = {}
+                if not isinstance(macros, dict):
+                    return "Could not read current macro goals — cannot apply update."
+                macros.update({k: v for k, v in macro_overrides.items() if v is not None})
+                current["macroGoals"] = macros
+
             resp = garmin_client.client.put("connectapi", url, json=current, api=True)
-            result = resp if resp else current
-            return json.dumps({
-                "status": "updated",
+
+            # Read back what Garmin actually stored rather than trusting the PUT.
+            try:
+                stored = garmin_client.connectapi(url)
+            except Exception:
+                stored = None
+            if not isinstance(stored, dict) or not stored:
+                stored = resp if isinstance(resp, dict) and resp else None
+            if stored is None:
+                return "Nutrition update submitted, but could not read back the stored settings to confirm it."
+
+            stored_macros = stored.get("macroGoals") or {}
+            mismatches = []
+            if calorie_goal is not None and stored.get("calorieGoal") != calorie_goal:
+                mismatches.append(f"calories {stored.get('calorieGoal')} (asked {calorie_goal})")
+            for key, wanted in macro_overrides.items():
+                if wanted is None:
+                    continue
+                got = stored_macros.get(key)
+                try:
+                    differs = got is None or abs(float(got) - wanted) > 0.5
+                except (TypeError, ValueError):
+                    differs = True
+                if differs:
+                    mismatches.append(f"{key} {got} (asked {wanted})")
+
+            out = {
+                "status": "updated" if not mismatches else "not_applied",
                 "date": date,
-                "calorie_goal": result.get("activeDailyCalories"),
-                "carbs_grams": result.get("activeDailyCarbohydrateGrams"),
-                "fat_grams": result.get("activeDailyFatGrams"),
-                "protein_grams": result.get("activeDailyProteinGrams"),
-            }, indent=2)
+                "calorie_goal": stored.get("calorieGoal"),
+                "carbs_grams": stored_macros.get("carbs"),
+                "fat_grams": stored_macros.get("fat"),
+                "protein_grams": stored_macros.get("protein"),
+                "weight_goal_type": stored.get("weightChangeType"),
+                "weight_goal_target_date": stored.get("targetDate"),
+            }
+            if mismatches:
+                out["warning"] = (
+                    "Garmin stored different goals from the ones requested: "
+                    + "; ".join(mismatches)
+                    + ". It may be recalculating them from the weight goal set in the Garmin Connect app."
+                )
+            return json.dumps(out, indent=2)
         except Exception as e:
             return f"Error updating nutrition settings: {str(e)}"
 
