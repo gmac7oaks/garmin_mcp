@@ -195,18 +195,23 @@ def _set_amount(item: dict, timed: bool) -> Optional[int]:
 def format_sets(sets: Sequence[dict]) -> str:
     """Compact text for one exercise's sets, e.g. "16 kg × 8·8, 20 kg × 8"."""
     timed = all(not s.get("reps") for s in sets)
+    # A set with no weight recorded is bodyweight when no set carried a load.
+    bodyweight = not any(s.get("weight") for s in sets)
     parts: List[Tuple[Optional[float], List[str]]] = []
     for item in sets:
         amount = _set_amount(item, timed)
         text = "?" if amount is None else (f"{amount}s" if timed else str(amount))
-        if parts and _same(parts[-1][0], item.get("weight")):
+        weight = item.get("weight")
+        if weight is None and bodyweight:
+            weight = 0.0
+        if parts and _same(parts[-1][0], weight):
             parts[-1][1].append(text)
         else:
-            parts.append((item.get("weight"), [text]))
+            parts.append((weight, [text]))
     out = []
     for weight, amounts in parts:
         if weight is None:
-            prefix = ""
+            prefix = "? kg × "
         elif weight == 0:
             prefix = "BW × "
         else:
@@ -413,7 +418,8 @@ def recommend(item: dict, history: Sequence[Tuple[str, dict]]) -> dict:
         return result
 
     last_date, last = history[-1]
-    result["last"] = last["top_text"]
+    # Show the ramp-up too when not every planned set was at the top weight.
+    result["last"] = last["top_text"] if len(last["done"]) >= sets else last["text"]
     result["last_date"] = last_date
     last_weight = last.get("top")
 
@@ -591,7 +597,8 @@ def _progress(index, weeks: List[datetime.date], today: datetime.date, labels, p
             status = "stalled"
         else:
             status = "hold"
-        # This week's plan knows the rep targets, so its verdict wins.
+        # This week's plan knows the rep targets (and whether the weight has
+        # already been raised), so its verdict wins.
         status = plan_status.get((group, key), status)
         entry = {
             "id": f"{group}:{key}",
@@ -697,7 +704,7 @@ def build_report(
             if matched:
                 labels.setdefault(matched, item["label"])
                 plan_order.setdefault(matched, len(plan_order))
-                if advice["status"] in ("increase", "below"):
+                if advice["status"] in ("increase", "below", "up"):
                     plan_status[matched] = advice["status"]
             rows.append(
                 {
