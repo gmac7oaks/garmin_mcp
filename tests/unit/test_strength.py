@@ -177,10 +177,12 @@ def test_recommend_increase_once_and_running():
     once = strength.recommend(item, _history(("2026-10-21", [{"weight": 70.0, "reps": 8}] * 3), ("2026-10-28", done)))
     assert once["status"] == "increase"
     assert once["next_weight"] == 75.5
-    assert once["action"] == "Go up to 75.5 kg (hit 3×8 once)"
+    assert (once["action"], once["reason"]) == ("Go up to 75.5 kg", "hit 3×8 last time")
     twice = strength.recommend(item, _history(("2026-10-21", done), ("2026-10-28", done)))
     assert twice["streak"] == 2
-    assert "2 sessions running" in twice["action"]
+    assert twice["reason"] == "hit 3×8 2 sessions running"
+    pair = strength.recommend({**item, "weight": 32.0, "pair": True}, _history(("2026-10-24", [{"weight": 32.0, "reps": 16}] * 3)))
+    assert (pair["plan"], pair["action"]) == ("3×8 @ 32 kg (2×16)", "Go up to 36 kg (2×18)")
 
 
 def test_recommend_hold_up_below_and_new():
@@ -189,26 +191,70 @@ def test_recommend_hold_up_below_and_new():
     hold = strength.recommend(item, ramped)
     assert hold["status"] == "hold"
     assert hold["last"] == "20 kg × 8"
-    assert hold["action"] == "Stay at 20 kg until you hit 3×8"
+    assert (hold["action"], hold["reason"]) == ("Stay at 20 kg", "aim for 3×8")
 
     up = strength.recommend({**item, "weight": 24.0}, ramped)
-    assert (up["status"], up["action"]) == ("up", "Already up +4 kg")
+    assert (up["status"], up["action"], up["reason"]) == ("up", "Already up +4 kg", "from 20 kg")
 
     below = strength.recommend({**item, "weight": 17.0}, _history(("2026-10-24", [{"weight": 22.0, "reps": 10}] * 3)))
     assert below["status"] == "below"
+    assert below["action"] == "Set the plan to 22 kg"
     assert below["next_weight"] == 22.0
 
     assert strength.recommend(item, [])["status"] == "new"
 
 
+def test_recommend_one_heavier_set_is_not_a_new_baseline():
+    # Dead bug: planned 3×8 at 4 kg; did 4, 4 and one set at 10 kg.
+    item = {"key": "HIP_STABILITY/WEIGHTED_DEAD_BUG", "category": "HIP_STABILITY", "name": "WEIGHTED_DEAD_BUG",
+            "weight": 4.0, "sets": 3, "reps": 8}
+    last = _history(("2026-10-24", [{"weight": 4.0, "reps": 8}, {"weight": 4.0, "reps": 8}, {"weight": 10.0, "reps": 8}]))
+    advice = strength.recommend(item, last)
+    assert advice["status"] == "increase"
+    assert advice["next_weight"] == 6.5
+
+
 def test_recommend_bodyweight_and_failure_sets():
     pullups = {"key": "PULL_UP/PULL_UP", "category": "PULL_UP", "name": "PULL_UP", "weight": None, "sets": 3, "reps": 8}
     hit = strength.recommend(pullups, _history(("2026-10-29", [{"weight": 0.0, "reps": 8}] * 3)))
-    assert hit["status"] == "bodyweight"
-    assert hit["action"].startswith("Hit every set")
+    assert (hit["status"], hit["action"], hit["reason"]) == ("bodyweight", "Add reps or a harder variation", "hit 3×8")
+    miss = strength.recommend(pullups, _history(("2026-10-09", [{"weight": 0.0, "reps": 4}, {"weight": 0.0, "reps": 6}])))
+    assert miss["action"] == "Aim for 3×8"
+    plank = {"key": "PLANK/SIDE_PLANK", "category": "PLANK", "name": "SIDE_PLANK", "weight": None, "sets": 6, "seconds": 45}
+    held = strength.recommend(plank, _history(("2026-10-24", [{"weight": 0.0, "reps": None, "seconds": 45}] * 6)))
+    assert held["action"] == "Add time or a harder variation"
     pushups = {"key": "PUSH_UP/PUSH_UP", "category": "PUSH_UP", "weight": None, "sets": 2, "to_failure": True}
     fail = strength.recommend(pushups, _history(("2026-10-27", [{"weight": 0.0, "reps": 27}, {"weight": 0.0, "reps": 18}])))
     assert (fail["status"], fail["action"], fail["plan"]) == ("failure", "Beat 27·18", "2 sets to failure")
+
+
+def test_plan_aliases_fold_unnamed_sets_only_when_unambiguous():
+    core = [{"key": "PUSH_UP/PUSH_UP"}, {"key": "CARRY/FARMERS_CARRY"}]
+    push = [{"key": "BENCH_PRESS/INCLINE_DUMBBELL_BENCH_PRESS"}, {"key": "BENCH_PRESS/"}]
+    pull = [{"key": "PULL_UP/PULL_UP"}, {"key": "PULL_UP/LAT_PULLDOWN"}]
+    aliases = strength.plan_aliases([("Core", core), ("Push", push), ("Pull", pull)])
+    assert aliases == {("Core", "PUSH_UP/"): "PUSH_UP/PUSH_UP", ("Core", "CARRY/"): "CARRY/FARMERS_CARRY"}
+
+
+def test_report_merges_unnamed_history_into_the_planned_exercise():
+    plan = workout(
+        "Core v2",
+        repeat(3, ex("PUSH_UP", "PUSH_UP", reps=16, desc="TRX push-up to knee tuck, slow and controlled")),
+        repeat(3, ex("CARRY", "FARMERS_CARRY", 24, seconds=40, desc="Suitcase carry - LEFT hand")),
+    )
+    schedule = [{"scheduleDate": "2026-11-07", "workoutId": 9, "workoutName": "Core v2", "workoutType": "strength_training"}]
+    acts = [activity(1, "Core v2", "2026-10-17 07:00:00"), activity(2, "Core v2", "2026-10-24 07:00:00")]
+    sets = {
+        1: {"exerciseSets": [raw_set("PUSH_UP", "PUSH_UP", 0, reps=16) for _ in range(3)]},
+        2: {"exerciseSets": [raw_set("PUSH_UP", None, 0, reps=16) for _ in range(3)]},
+    }
+    report = strength.build_report(acts, sets, schedule, {9: plan}, TODAY, 60)
+    row = report["this_week"][0]["items"][0]
+    assert row["exercise"] == "TRX push-up to knee tuck"
+    assert row["last_date"] == "2026-10-24"
+    core = report["progress"]["core"]["exercises"]
+    assert [(e["name"], e["sessions"]) for e in core] == [("TRX push-up to knee tuck", 2)]
+    assert report["log"]["part1"][0]["exercises"][0][0] == "TRX push-up to knee tuck"
 
 
 def test_report_this_week_uses_the_scheduled_plans(report):
