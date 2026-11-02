@@ -54,20 +54,6 @@ _NOT_A_NAME = frozenset(
     {"failure", "reps", "rep", "each", "per", "side", "intent", "single", "set", "lap", "max", "seated"}
 )
 
-# Statuses, in the order the dashboard should care about them.
-STATUS_LABELS = {
-    "increase": "Go up",
-    "below": "Plan below last",
-    "stalled": "Same weight 3+ wk",
-    "hold": "Building reps",
-    "up": "Increased",
-    "down": "Dropped",
-    "failure": "To failure",
-    "bodyweight": "Bodyweight",
-    "new": "New",
-}
-
-
 # --------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------
