@@ -234,6 +234,7 @@ def summarise_exercise(sets: Sequence[dict]) -> dict:
         "top": top,
         "timed": timed,
         "done": [a for a in (_set_amount(s, timed) for s in at_top) if a],
+        "pairs": [(s.get("weight"), _set_amount(s, timed)) for s in sets],
         "top_text": format_sets(at_top),
         "sets": len(sets),
         "volume": round(volume),
@@ -366,17 +367,35 @@ def _hit(entry: dict, target: Optional[int], sets: int) -> bool:
     return sum(1 for amount in entry["done"] if amount >= target) >= max(sets, 1)
 
 
+def _sets_reaching(entry: dict, weight: float, target: Optional[int]) -> int:
+    """Sets done at `weight` or heavier that reached the rep/time target."""
+    if not target:
+        return 0
+    return sum(
+        1
+        for set_weight, amount in entry["pairs"]
+        if set_weight is not None and set_weight >= weight - 0.05 and amount is not None and amount >= target
+    )
+
+
+def _kg_text(weight: float, pair: bool) -> str:
+    return f"{fmt_kg(weight)} kg (2×{fmt_kg(weight / 2)})" if pair else f"{fmt_kg(weight)} kg"
+
+
 def recommend(item: dict, history: Sequence[Tuple[str, dict]]) -> dict:
-    """What to do with a planned exercise, given its history (oldest first)."""
+    """What to do with a planned exercise, given its history (oldest first).
+
+    Returns the plan and last performance as text, a status, a short action,
+    the reason for it and, when the weight should change, the new weight.
+    """
     plan_weight = item.get("weight")
     target, timed = _target(item)
     sets = item.get("sets") or 1
     unit = "s" if timed else ""
-    plan_text = f"{sets}×{target}{unit}" if target else f"{sets} sets"
+    scheme = f"{sets}×{target}{unit}" if target else f"{sets} sets"
+    plan_text = scheme
     if plan_weight:
-        plan_text += f" @ {fmt_kg(plan_weight)} kg"
-        if item.get("pair"):
-            plan_text += f" (2×{fmt_kg(plan_weight / 2)})"
+        plan_text += f" @ {_kg_text(plan_weight, item.get('pair'))}"
     elif item.get("to_failure"):
         plan_text = f"{sets} sets to failure"
     result = {
@@ -385,7 +404,8 @@ def recommend(item: dict, history: Sequence[Tuple[str, dict]]) -> dict:
         "last": None,
         "last_date": None,
         "status": "new",
-        "action": "No history yet",
+        "action": "New",
+        "reason": "no history yet",
         "next_weight": None,
         "streak": 0,
     }
@@ -399,51 +419,54 @@ def recommend(item: dict, history: Sequence[Tuple[str, dict]]) -> dict:
 
     if item.get("to_failure"):
         best = "·".join(str(a) for a in last["done"]) or "–"
-        result.update(status="failure", action=f"Beat {best}")
+        result.update(status="failure", action=f"Beat {best}", reason="sets to failure")
         return result
 
     if not plan_weight:
         if _hit(last, target, sets):
-            action = "Hit every set: add reps or a harder variation"
+            action = "Add time or a harder variation" if timed else "Add reps or a harder variation"
+            result.update(status="bodyweight", action=action, reason=f"hit {scheme}")
         else:
-            action = f"Aim for {plan_text}"
-        result.update(status="bodyweight", action=action)
+            result.update(status="bodyweight", action=f"Aim for {scheme}", reason="bodyweight")
         return result
 
     if last_weight is None or last_weight == 0:
-        result.update(status="hold", action="No weight logged last time")
+        result.update(status="hold", action=f"Stay at {fmt_kg(plan_weight)} kg", reason="no weight logged last time")
         return result
     if plan_weight > last_weight + 0.05:
-        result.update(status="up", action=f"Already up +{fmt_kg(plan_weight - last_weight)} kg")
+        result.update(
+            status="up",
+            action=f"Already up +{fmt_kg(plan_weight - last_weight)} kg",
+            reason=f"from {fmt_kg(last_weight)} kg",
+        )
         return result
-    if plan_weight < last_weight - 0.05:
+    if plan_weight < last_weight - 0.05 and len(last["done"]) >= sets:
         result.update(
             status="below",
-            action=f"Last time {fmt_kg(last_weight)} kg: set the plan to at least that",
+            action=f"Set the plan to {fmt_kg(last_weight)} kg",
+            reason=f"did {len(last['done'])} sets at it last time",
             next_weight=last_weight,
         )
         return result
 
     streak = 0
     for _, entry in reversed(history):
-        if _same(entry.get("top"), plan_weight) and _hit(entry, target, sets):
+        if _sets_reaching(entry, plan_weight, target) >= sets:
             streak += 1
         else:
             break
     result["streak"] = streak
     if streak:
         new_weight = next_weight(item, plan_weight)
-        text = f"{fmt_kg(new_weight)} kg"
-        if item.get("pair"):
-            text += f" (2×{fmt_kg(new_weight / 2)})"
-        times = "once" if streak == 1 else f"{streak} sessions running"
+        when = "last time" if streak == 1 else f"{streak} sessions running"
         result.update(
             status="increase",
-            action=f"Go up to {text} (hit {plan_text.split(' @ ')[0]} {times})",
+            action=f"Go up to {_kg_text(new_weight, item.get('pair'))}",
+            reason=f"hit {scheme} {when}",
             next_weight=new_weight,
         )
     else:
-        result.update(status="hold", action=f"Stay at {fmt_kg(plan_weight)} kg until you hit {plan_text.split(' @ ')[0]}")
+        result.update(status="hold", action=f"Stay at {fmt_kg(plan_weight)} kg", reason=f"aim for {scheme}")
     return result
 
 
@@ -458,6 +481,30 @@ def _history_index(sessions: Sequence[dict]) -> Dict[Tuple[str, str], List[Tuple
         for exercise in session["exercises"]:
             index.setdefault((session["group"], exercise["key"]), []).append((session["date"], exercise))
     return index
+
+
+def plan_aliases(plans: Iterable[Tuple[str, Sequence[dict]]]) -> Dict[Tuple[str, str], str]:
+    """Category-only keys to fold into a named key, per workout type.
+
+    Garmin logs a set without an exercise name when the step had none, so the
+    same movement can appear as "PUSH_UP/" and "PUSH_UP/PUSH_UP". When a
+    workout type's plan names exactly one exercise in a category and has no
+    unnamed step in it, unnamed history in that category is that exercise.
+    """
+    keys_by_group: Dict[str, set] = {}
+    for group, items in plans:
+        keys_by_group.setdefault(group, set()).update(item["key"] for item in items)
+    aliases: Dict[Tuple[str, str], str] = {}
+    for group, keys in keys_by_group.items():
+        named: Dict[str, List[str]] = {}
+        for key in keys:
+            category, name = key.split("/", 1)
+            if name:
+                named.setdefault(category, []).append(key)
+        for category, options in named.items():
+            if len(options) == 1 and exercise_key(category, None) not in keys:
+                aliases[(group, exercise_key(category, None))] = options[0]
+    return aliases
 
 
 def _match_history(index, group: str, item: dict):
@@ -607,35 +654,41 @@ def build_report(
     today: datetime.date,
     days: int,
     log_parts: int = 3,
-    log_part_bytes: int = 12000,
+    log_part_bytes: int = 14000,
 ) -> dict:
     """Everything the dashboard needs, from already-fetched Garmin data."""
     since = today - datetime.timedelta(days=days)
-    sessions = []
-    for activity in activities:
-        session = summarise_session(activity, sets_by_id.get(activity.get("activityId")))
-        if session["date"] and since.isoformat() <= session["date"] <= today.isoformat() and session["exercises"]:
-            sessions.append(session)
-    sessions.sort(key=lambda s: (s["date"], s["id"] or 0), reverse=True)
-    index = _history_index(sessions)
-
     this_monday = monday(today)
     this_sunday = this_monday + datetime.timedelta(days=6)
 
-    # This week's plan.
-    labels: Dict[Tuple[str, str], str] = {}
-    plan_status: Dict[Tuple[str, str], str] = {}
-    plan_order: Dict[Tuple[str, str], int] = {}
-    this_week = []
+    # This week's loaded strength workouts (mobility and the like are skipped).
+    plans = []
     for entry in sorted(schedule or [], key=lambda s: str(s.get("scheduleDate") or "")):
         workout = workouts.get(entry.get("workoutId"))
         if not workout:
             continue
         items = plan_items(workout)
         if not any(item.get("weight") for item in items):
-            continue  # mobility and other unloaded sessions
+            continue
         name = entry.get("workoutName") or workout.get("workoutName") or "Workout"
-        group = workout_group(name)
+        plans.append((entry, name, workout_group(name), items))
+    aliases = plan_aliases((group, items) for _, _, group, items in plans)
+
+    sessions = []
+    for activity in activities:
+        session = summarise_session(activity, sets_by_id.get(activity.get("activityId")))
+        if session["date"] and since.isoformat() <= session["date"] <= today.isoformat() and session["exercises"]:
+            for exercise in session["exercises"]:
+                exercise["key"] = aliases.get((session["group"], exercise["key"]), exercise["key"])
+            sessions.append(session)
+    sessions.sort(key=lambda s: (s["date"], s["id"] or 0), reverse=True)
+    index = _history_index(sessions)
+
+    labels: Dict[Tuple[str, str], str] = {}
+    plan_status: Dict[Tuple[str, str], str] = {}
+    plan_order: Dict[Tuple[str, str], int] = {}
+    this_week = []
+    for entry, name, group, items in plans:
         rows = []
         for item in items:
             matched = _match_history(index, group, item)
@@ -649,7 +702,10 @@ def build_report(
             rows.append(
                 {
                     "exercise": item["label"],
-                    **{k: advice[k] for k in ("plan", "last", "last_date", "status", "action", "next_weight")},
+                    **{
+                        k: advice[k]
+                        for k in ("plan", "last", "last_date", "status", "action", "reason", "next_weight")
+                    },
                 }
             )
         when = datetime.date.fromisoformat(str(entry.get("scheduleDate"))[:10])
