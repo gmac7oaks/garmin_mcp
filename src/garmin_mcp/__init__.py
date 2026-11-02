@@ -475,7 +475,7 @@ def main():
         api_token = os.getenv("GARMIN_API_TOKEN", "").strip()
         if api_token:
             http_api.register_routes(fastmcp, garmin_client, api_token)
-            print("HTTP API enabled: GET /api/nutrition", file=sys.stderr)
+            print("HTTP API enabled: GET /api/nutrition, GET /api/strength", file=sys.stderr)
 
         print(
             f"Serving MCP over {transport} on {http_host}:{http_port}",
