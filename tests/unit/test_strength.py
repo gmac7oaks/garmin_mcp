@@ -356,6 +356,22 @@ def test_progress_status_stalled_and_down():
     assert report["progress"]["pull"]["exercises"][0]["status"] == "down"
 
 
+def test_one_off_exercises_are_retired_unless_planned():
+    acts = [activity(1, "Pull v2", "2026-10-09 06:00:00"), activity(2, "Pull v3", "2026-10-29 06:00:00")]
+    sets = {
+        1: {"exerciseSets": [raw_set("PULL_UP", None, 0, reps=4), raw_set("PULL_UP", None, 0, reps=6)]},
+        2: {"exerciseSets": [raw_set("ROW", "BENT_OVER_ROW_WITH_DUMBELL", 36, reps=8)]},
+    }
+    report = strength.build_report(acts, sets, [], {}, TODAY, 60)
+    assert report["progress"]["pull"]["exercises"] == []  # one session each, nothing planned
+    assert {r["name"] for r in report["progress"]["retired"]} == {"Pull up", "Bent over row with dumbbell"}
+
+    plan = workout("Pull v3", repeat(3, ex("ROW", "BENT_OVER_ROW_WITH_DUMBELL", 36, reps=8)))
+    schedule = [{"scheduleDate": "2026-11-06", "workoutId": 7, "workoutName": "Pull v3", "workoutType": "strength_training"}]
+    report = strength.build_report(acts, sets, schedule, {7: plan}, TODAY, 60)
+    assert [e["name"] for e in report["progress"]["pull"]["exercises"]] == ["Bent over row with dumbbell"]
+
+
 def test_report_skips_unloaded_workouts_and_tolerates_missing_sets():
     report = strength.build_report(ACTIVITIES, {}, SCHEDULE, WORKOUTS, TODAY, 120)
     assert report["summary"]["sessions"] == 0

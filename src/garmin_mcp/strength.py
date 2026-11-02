@@ -550,8 +550,9 @@ def _spark(values: Sequence[Optional[float]]) -> str:
 def _progress(index, weeks: List[datetime.date], today: datetime.date, labels, plan_status, plan_order) -> dict:
     """Per-exercise progression, split by workout type plus a "retired" list.
 
-    An exercise is current if it was done in the last 28 days; older ones are
-    listed briefly under "retired" (renamed or dropped exercises).
+    An exercise is current if it is in this week's plan, or was done at least
+    twice with the latest time in the last 28 days; the rest are listed
+    briefly under "retired" (one-offs, renamed or dropped exercises).
     """
     week_pos = {week: i for i, week in enumerate(weeks)}
     cutoff_active = today - datetime.timedelta(days=28)
@@ -561,7 +562,10 @@ def _progress(index, weeks: List[datetime.date], today: datetime.date, labels, p
         last_date, last = history[-1]
         first_date, first = history[0]
         name = labels.get((group, key)) or last["label"]
-        if datetime.date.fromisoformat(last_date) < cutoff_active:
+        recent = datetime.date.fromisoformat(last_date) >= cutoff_active
+        # Current: in this week's plan, or done more than once recently. One-offs
+        # and renamed or dropped exercises stay in the log and the retired list.
+        if not ((group, key) in plan_order or (recent and len(history) > 1)):
             retired.append(
                 {"group": group, "name": name, "sessions": len(history), "last_date": last_date, "now": last["top_text"]}
             )
