@@ -1,11 +1,16 @@
-"""Tests for the plain HTTP API (GET /api/nutrition)."""
+"""Tests for the plain HTTP API (GET /api/nutrition and /api/strength)."""
 import datetime
+import time
 
 import pytest
 from mcp.server.fastmcp import FastMCP
 from starlette.testclient import TestClient
 
 from garmin_mcp import http_api
+from tests.fixtures.strength_data import ACTIVITIES as STRENGTH_ACTIVITIES
+from tests.fixtures.strength_data import SCHEDULE as STRENGTH_SCHEDULE
+from tests.fixtures.strength_data import WORKOUTS as STRENGTH_WORKOUTS
+from tests.fixtures.strength_data import load_sets
 
 TOKEN = "s3cret-token"
 
@@ -211,3 +216,123 @@ def test_route_reports_garmin_failure_as_502():
     r = client.get("/api/nutrition?date=2026-11-02", headers={"Authorization": f"Bearer {TOKEN}"})
     assert r.status_code == 502
     assert "rate limited" in r.json()["error"]
+
+
+# --- /api/strength -------------------------------------------------------
+
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+class _FakeStrengthClient:
+    def __init__(self, fail_sets=(), fail_list=False):
+        self.calls = []
+        self.sets = load_sets()
+        self.fail_sets = set(fail_sets)
+        self.fail_list = fail_list
+
+    def connectapi(self, url, params=None):
+        self.calls.append(("list", url, dict(params or {})))
+        if self.fail_list:
+            raise RuntimeError("rate limited")
+        return list(STRENGTH_ACTIVITIES) if (params or {}).get("start") == "0" else []
+
+    def get_activity_exercise_sets(self, activity_id):
+        self.calls.append(("sets", activity_id))
+        if activity_id in self.fail_sets:
+            raise RuntimeError("not found")
+        return self.sets[activity_id]
+
+    def query_garmin_graphql(self, query):
+        self.calls.append(("schedule", query["query"]))
+        return {"data": {"workoutScheduleSummariesScalar": STRENGTH_SCHEDULE}}
+
+    def get_workout_by_id(self, workout_id):
+        self.calls.append(("workout", workout_id))
+        return STRENGTH_WORKOUTS[workout_id]
+
+
+def _strength_app(garmin, now=None):
+    fastmcp = FastMCP("test")
+    data = http_api.StrengthData(garmin, clock=(lambda: now[0]) if now else time.monotonic)
+    http_api.register_routes(fastmcp, garmin, TOKEN, strength_data=data)
+    return TestClient(fastmcp.streamable_http_app())
+
+
+def test_strength_route_requires_bearer_token():
+    garmin = _FakeStrengthClient()
+    client = _strength_app(garmin)
+    assert client.get("/api/strength").status_code == 401
+    assert garmin.calls == []
+
+
+def test_strength_route_returns_the_report():
+    garmin = _FakeStrengthClient()
+    r = _strength_app(garmin).get("/api/strength?date=2026-11-02", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["summary"]["increases_due"] == 5
+    assert body["summary"]["sessions"] == 4
+    assert body["summary"]["activities_skipped"] == 0
+    assert [w["workout"] for w in body["this_week"]] == ["Push v3", "Legs v2"]
+    assert body["progress"]["push"]["exercises"][0]["name"] == "Incline dumbbell bench press"
+    assert "updated" in body
+
+    kind, url, params = garmin.calls[0]
+    assert (kind, url) == ("list", http_api.ACTIVITIES_URL)
+    assert params["startDate"] == "2026-07-05" and params["endDate"] == "2026-11-02"
+    assert params["activityType"] == "fitness_equipment"
+    fetched_sets = sorted(c[1] for c in garmin.calls if c[0] == "sets")
+    assert fetched_sets == [23686126228, 24464818941, 24865183793, 24877545501]  # not the rowing
+    schedule = [c[1] for c in garmin.calls if c[0] == "schedule"]
+    assert schedule == ['query{workoutScheduleSummariesScalar(startDate:"2026-11-02", endDate:"2026-11-08")}']
+    workouts = sorted(c[1] for c in garmin.calls if c[0] == "workout")
+    assert workouts == [1716968605, 1729230803, 1743815609]  # strength only, not the run
+
+
+def test_strength_route_caches_garmin_calls():
+    now = [0.0]
+    garmin = _FakeStrengthClient()
+    client = _strength_app(garmin, now)
+    client.get("/api/strength?date=2026-11-02", headers=AUTH)
+    first = len(garmin.calls)
+
+    client.get("/api/strength?date=2026-11-02", headers=AUTH)
+    assert len(garmin.calls) == first  # report cache
+
+    now[0] += 6 * 60  # report stale, everything else fresh
+    client.get("/api/strength?date=2026-11-02", headers=AUTH)
+    assert len(garmin.calls) == first
+
+    now[0] += 20 * 60  # list, schedule and plans stale; settled sets are kept
+    client.get("/api/strength?date=2026-11-02", headers=AUTH)
+    kinds = [c[0] for c in garmin.calls[first:]]
+    assert kinds.count("list") == 1
+    assert kinds.count("schedule") == 1
+    assert kinds.count("workout") == 3
+    assert kinds.count("sets") == 0
+
+
+def test_strength_route_rejects_bad_parameters():
+    client = _strength_app(_FakeStrengthClient())
+    for query in ("date=02-11-2026", "days=3", "days=400", "days=x", "log_parts=9"):
+        assert client.get(f"/api/strength?{query}", headers=AUTH).status_code == 400, query
+
+
+def test_strength_route_reports_garmin_failure_as_502():
+    client = _strength_app(_FakeStrengthClient(fail_list=True))
+    r = client.get("/api/strength?date=2026-11-02", headers=AUTH)
+    assert r.status_code == 502
+    assert "rate limited" in r.json()["error"]
+
+
+def test_strength_route_skips_an_unreadable_activity():
+    client = _strength_app(_FakeStrengthClient(fail_sets={24464818941}))
+    body = client.get("/api/strength?date=2026-11-02", headers=AUTH).json()
+    assert body["summary"]["activities_skipped"] == 1
+    assert body["summary"]["sessions"] == 3
+
+
+def test_strength_route_fails_when_no_activity_is_readable():
+    ids = {a["activityId"] for a in STRENGTH_ACTIVITIES}
+    client = _strength_app(_FakeStrengthClient(fail_sets=ids))
+    assert client.get("/api/strength?date=2026-11-02", headers=AUTH).status_code == 502
