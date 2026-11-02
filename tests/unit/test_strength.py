@@ -92,6 +92,10 @@ def test_format_sets_groups_by_weight_and_handles_timed_sets():
     assert strength.format_sets(rdl) == "16 kg × 8·8, 20 kg × 8"
     carry = [{"weight": 24.0, "reps": None, "seconds": 40}] * 2
     assert strength.format_sets(carry) == "24 kg × 40s·40s"
+    pullups = [{"weight": None, "reps": 8}, {"weight": 0.0, "reps": 8}, {"weight": 0.0, "reps": 8}]
+    assert strength.format_sets(pullups) == "BW × 8·8·8"
+    unlogged = [{"weight": None, "reps": 8}, {"weight": 20.0, "reps": 8}]
+    assert strength.format_sets(unlogged) == "? kg × 8, 20 kg × 8"
 
 
 @pytest.mark.parametrize(
@@ -190,7 +194,7 @@ def test_recommend_hold_up_below_and_new():
     ramped = _history(("2026-10-28", [{"weight": 16.0, "reps": 8}, {"weight": 16.0, "reps": 8}, {"weight": 20.0, "reps": 8}]))
     hold = strength.recommend(item, ramped)
     assert hold["status"] == "hold"
-    assert hold["last"] == "20 kg × 8"
+    assert hold["last"] == "16 kg × 8·8, 20 kg × 8"  # the ramp shows when sets fell short
     assert (hold["action"], hold["reason"]) == ("Stay at 20 kg", "aim for 3×8")
 
     up = strength.recommend({**item, "weight": 24.0}, ramped)
@@ -295,6 +299,7 @@ def test_report_progress_tracks_load_over_time(report):
     assert incline["weekly"][weeks.index("2026-09-21")] == 56.0
     assert incline["spark"].startswith("▁") and incline["spark"].endswith("█·")
     assert push["Lateral raise"]["status"] == "increase"  # the plan's verdict wins
+    assert push["Alternating dumbbell curls"]["status"] == "up"  # 18 kg twice, plan now 20 kg
     # The plan's order leads the table; July-only exercises are retired.
     assert list(push)[:2] == ["Incline dumbbell bench press", "Flat bench"]
     retired = {r["name"] for r in report["progress"]["retired"]}
