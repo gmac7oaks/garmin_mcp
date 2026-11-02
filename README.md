@@ -445,8 +445,9 @@ When an HTTP transport is selected:
 
 - MCP clients connect to the **`/mcp`** path (e.g. `http://localhost:8000/mcp`).
 - A plain **`GET /healthz`** endpoint is exposed for liveness/readiness probes.
+- If `GARMIN_API_TOKEN` is set, **`GET /api/nutrition`** returns the day's nutrition summary as JSON for dashboards (e.g. Home Assistant REST sensors): goals, totals, remaining, % of goal and meals with their foods. Send `Authorization: Bearer <GARMIN_API_TOKEN>`. Query parameters: `date` (`YYYY-MM-DD`, default today in the server's time zone) and `days` (0–31 days of daily totals ending on `date`, in `history`). Past days are cached, so history polls don't cost a Garmin request per day each time.
 
-The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
+The server itself performs **no authentication** on the MCP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
 
 ### Garmin Connect China (garmin.cn)
 

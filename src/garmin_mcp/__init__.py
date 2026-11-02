@@ -29,6 +29,7 @@ from garmin_mcp import nutrition
 from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
+from garmin_mcp import http_api
 
 
 def is_interactive_terminal() -> bool:
@@ -468,6 +469,13 @@ def main():
         @fastmcp.custom_route("/healthz", methods=["GET"])
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
+
+        # Read-only JSON for dashboards, behind a bearer token. Not registered
+        # without GARMIN_API_TOKEN, since the MCP endpoint has no auth.
+        api_token = os.getenv("GARMIN_API_TOKEN", "").strip()
+        if api_token:
+            http_api.register_routes(fastmcp, garmin_client, api_token)
+            print("HTTP API enabled: GET /api/nutrition", file=sys.stderr)
 
         print(
             f"Serving MCP over {transport} on {http_host}:{http_port}",
