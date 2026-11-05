@@ -141,10 +141,27 @@ def test_get_caches_until_stale_or_refresh():
     assert client.calls.count("activities") > n
 
 
-def test_seconds_until_refresh_targets_next_4am():
-    data = make(FakeGarmin())
-    assert data.seconds_until_refresh(datetime.datetime(2026, 11, 5, 3, 0)) == 3600
-    assert data.seconds_until_refresh(datetime.datetime(2026, 11, 5, 5, 0)) == 23 * 3600
+def test_refresh_runs_at_7_13_20_uk_time():
+    data = make(FakeGarmin(), refresh_hours=(7, 13, 20))
+    nxt = lambda *a: data.seconds_until_refresh(datetime.datetime(*a)) / 3600  # noqa: E731
+    # Winter (GMT = UTC)
+    assert nxt(2026, 11, 5, 6, 0) == 1
+    assert nxt(2026, 11, 5, 7, 0) == 6
+    assert nxt(2026, 11, 5, 19, 30) == 0.5
+    assert nxt(2026, 11, 5, 21, 0) == 10  # next day 07:00
+    # Summer (BST = UTC+1): 07:00 BST is 06:00 UTC
+    assert nxt(2026, 7, 1, 5, 0) == 1
+    assert nxt(2026, 7, 1, 18, 0) == 1  # 20:00 BST = 19:00 UTC
+    assert nxt(2026, 7, 1, 19, 0) == 11  # then 07:00 BST next day = 06:00 UTC
+    # Clocks go forward on Sun 29 Mar 2026: Sat 20:00 GMT -> Sun 07:00 BST (06:00 UTC)
+    assert nxt(2026, 3, 28, 20, 0) == 10
+
+
+def test_refresh_hours_from_env(monkeypatch):
+    monkeypatch.setenv("TRAINING_REFRESH_HOURS", "20, 7,13,99,x")
+    assert td.refresh_hours_from_env() == (7, 13, 20)
+    monkeypatch.delenv("TRAINING_REFRESH_HOURS")
+    assert td.refresh_hours_from_env() == (7, 13, 20)
 
 
 def test_config_from_env(monkeypatch):

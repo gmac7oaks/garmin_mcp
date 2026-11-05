@@ -10,12 +10,13 @@ Garmin limits how much each request may cover, so ranged calls are chunked.
 Each section is fetched independently: if one fails the rest of the document
 is still served and the failure is listed under "errors".
 
-The document is cached in memory, rebuilt once a day in the background
-(REFRESH_HOUR local time) and on demand.
+The document is cached in memory and rebuilt in the background at each of
+REFRESH_HOURS (UK time, following BST) and on demand.
 """
 
 import datetime
 import logging
+import os
 import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -25,7 +26,26 @@ logger = logging.getLogger(__name__)
 ACTIVITY_PAGE = 100
 WELLNESS_DAYS = 365
 BODY_BATTERY_DAYS = 90
-REFRESH_HOUR = 4  # daily rebuild, server local time
+REFRESH_HOURS = (7, 13, 20)  # UK local time; override with TRAINING_REFRESH_HOURS="7,13,20"
+
+
+def refresh_hours_from_env() -> Tuple[int, ...]:
+    raw = os.getenv("TRAINING_REFRESH_HOURS", "")
+    hours = sorted({int(h) for h in raw.replace(" ", "").split(",") if h.isdigit() and 0 <= int(h) <= 23})
+    return tuple(hours) or REFRESH_HOURS
+
+
+def _last_sunday(year: int, month: int) -> datetime.date:
+    day = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
+    return day - datetime.timedelta(days=(day.weekday() + 1) % 7)
+
+
+def uk_offset(utc: datetime.datetime) -> datetime.timedelta:
+    """UK offset from UTC at a UTC instant: BST runs from 01:00 UTC on the last
+    Sunday of March to 01:00 UTC on the last Sunday of October."""
+    start = datetime.datetime.combine(_last_sunday(utc.year, 3), datetime.time(1))
+    end = datetime.datetime.combine(_last_sunday(utc.year, 10), datetime.time(1))
+    return datetime.timedelta(hours=1) if start <= utc.replace(tzinfo=None) < end else datetime.timedelta(0)
 
 # Fields kept from each activity in the list endpoint.
 _ACTIVITY_FIELDS = {
@@ -106,12 +126,14 @@ class TrainingData:
         clock: Callable[[], float] = time.time,
         today: Callable[[], datetime.date] = datetime.date.today,
         max_age: float = 26 * 3600,
+        refresh_hours: Optional[Iterable[int]] = None,
     ):
         self._client = client
         self._config = config or {}
         self._clock = clock
         self._today = today
         self._max_age = max_age
+        self._refresh_hours = tuple(sorted(refresh_hours)) if refresh_hours else refresh_hours_from_env()
         self._doc: Optional[Dict[str, Any]] = None
         self._built_at = 0.0
         self._build_lock = threading.Lock()
@@ -295,12 +317,18 @@ class TrainingData:
 
     # ----- daily refresh --------------------------------------------------
 
-    def seconds_until_refresh(self, now: Optional[datetime.datetime] = None) -> float:
-        now = now or datetime.datetime.now()
-        target = now.replace(hour=REFRESH_HOUR, minute=0, second=0, microsecond=0)
-        if target <= now:
-            target += datetime.timedelta(days=1)
-        return (target - now).total_seconds()
+    def seconds_until_refresh(self, now_utc: Optional[datetime.datetime] = None) -> float:
+        """Seconds from now_utc (naive UTC) to the next refresh hour in UK time."""
+        now_utc = now_utc or datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        local_day = (now_utc + uk_offset(now_utc)).date()
+        for offset_days in range(3):
+            day = local_day + datetime.timedelta(days=offset_days)
+            for hour in self._refresh_hours:
+                local = datetime.datetime.combine(day, datetime.time(hour))
+                target = local - uk_offset(local - datetime.timedelta(hours=1))
+                if target > now_utc:
+                    return (target - now_utc).total_seconds()
+        return 24 * 3600.0
 
     def start_daily_refresh(self) -> None:
         if self._scheduler is not None:
@@ -317,7 +345,7 @@ class TrainingData:
                     self.get(refresh=True)
                     logger.info("training data refreshed")
                 except Exception as exc:
-                    logger.warning("daily training refresh failed: %s", exc)
+                    logger.warning("scheduled training refresh failed: %s", exc)
 
         self._scheduler = threading.Thread(target=loop, name="training-refresh", daemon=True)
         self._scheduler.start()
