@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Coach</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;display:flex;min-height:100vh;color:#1f2933}
+nav{width:220px;background:#111827;color:#cbd5e1;padding:18px 14px;flex-shrink:0}
+nav h2{color:#fff;font-size:15px;margin:0 0 18px}
+.ath{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;background:#1f2937;color:#fff}
+.av{width:34px;height:34px;border-radius:50%;background:#2563eb;display:grid;place-items:center;font-weight:700;color:#fff}
+.inv{margin-top:10px;padding:8px;border:1px dashed #475569;border-radius:8px;text-align:center;color:#94a3b8}
+main{flex:1;background:#fff;padding:20px 26px;max-width:1150px}
+header{display:flex;align-items:center;gap:14px;border-bottom:1px solid #e5e7eb;padding-bottom:14px;margin-bottom:16px;flex-wrap:wrap}
+header .av{width:52px;height:52px;font-size:18px}
+.pill{margin-left:auto;background:#fef3c7;color:#92400e;border-radius:99px;padding:5px 12px;font-weight:600}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.grid{grid-template-columns:1fr}body{flex-direction:column}nav{width:auto}}
+.card{border:1px solid #e5e7eb;border-radius:10px;padding:14px}
+h3{margin:0 0 10px;font-size:14px;color:#374151}
+.flag{display:flex;gap:10px;align-items:center;padding:6px 0}.d{width:11px;height:11px;border-radius:50%;flex-shrink:0}
+table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:#6b7280;font-weight:500;font-size:12px}td,th{padding:6px 4px;border-bottom:1px solid #f1f5f9}
+.stack{display:flex;height:22px;border-radius:5px;overflow:hidden;margin:8px 0}
+textarea{width:100%;min-height:120px;font:inherit;padding:10px;border:1px solid #d1d5db;border-radius:8px}
+button{background:#2563eb;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:600;cursor:pointer;margin-top:8px}
+.muted{color:#6b7280;font-size:12px}
+</style></head><body>
+<nav><h2>Coach view</h2><div class="ath"><div class="av" id="ini1"></div><div><div id="nm1"></div><div class="muted" style="color:#94a3b8">active</div></div></div><div class="inv">+ Invite athlete</div></nav>
+<main>
+<header><div class="av" id="ini2"></div><div><div style="font-size:20px;font-weight:700" id="nm2"></div><div class="muted" id="goal"></div></div><span class="pill" id="pill"></span></header>
+<div class="grid">
+<div class="card"><h3>Weekly volume — last 10 weeks</h3><div id="vol"></div><div class="muted"><span style="color:#2563eb">■</span> run km &nbsp; <span style="color:#10b981">■</span> total training hours</div></div>
+<div class="card"><h3>Flags this morning</h3><div id="flags"></div></div>
+<div class="card"><h3>Last 8 sessions</h3><table id="sess"></table></div>
+<div class="card"><h3>Intensity — last 28 days</h3><div id="int"></div></div>
+<div class="card" style="grid-column:1/-1"><h3>Note to athlete</h3><textarea id="note"></textarea><br><button id="send">Send + update watch workout</button> <span class="muted" id="sent"></span></div>
+</div></main>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const name = T.qs.get("name") || D.cfg.athlete || "Guy McLaughlin", ini = name.split(" ").map((x) => x[0]).join("").slice(0, 2).toUpperCase();
+  ["ini1", "ini2"].forEach((i) => document.getElementById(i).textContent = ini);
+  ["nm1", "nm2"].forEach((i) => document.getElementById(i).textContent = name);
+  const g = T.goal(D);
+  document.getElementById("goal").textContent = `${g.name}${g.date ? " · " + T.dateLabel(g.date, { day: "numeric", month: "short" }) : ""}${g.days != null ? " · " + g.days + " days out" : ""} · last Garmin sync ${new Date(D.updated).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`;
+  const flags = T.flags(D).filter((f) => ["hrv", "sleep", "rhr", "form"].includes(f.key));
+  const n = flags.filter((f) => f.level !== "green").length;
+  document.getElementById("pill").textContent = n ? `${n} flag${n > 1 ? "s" : ""} today` : "No flags today";
+  const C = { green: "#10b981", amber: "#f59e0b", red: "#ef4444" };
+  document.getElementById("flags").innerHTML = flags.map((f) => `<div class="flag"><span class="d" style="background:${C[f.level]}"></span><b style="width:90px">${f.label}</b><span>${f.text}</span></div>`).join("");
+  const wk = T.weekly(D.acts, 10, (a) => ({ km: T.sum(a.filter((x) => x.sport === "run").map((r) => r.distance_m)) / 1000, h: T.sum(a.map((x) => x.duration_s)) / 3600 }));
+  const maxKm = Math.max(1, ...wk.map((w) => w.value.km)), maxH = Math.max(1, ...wk.map((w) => w.value.h));
+  let s = '<svg viewBox="0 0 520 170" width="100%">';
+  wk.forEach((w, i) => { const x = 10 + i * 51, hk = w.value.km / maxKm * 120, hh = w.value.h / maxH * 120;
+    s += `<rect x="${x}" y="${135 - hk}" width="20" height="${hk}" fill="#2563eb" rx="2"/><rect x="${x + 22}" y="${135 - hh}" width="20" height="${hh}" fill="#10b981" rx="2"/>`;
+    s += `<text x="${x + 10}" y="${131 - hk}" font-size="9" text-anchor="middle" fill="#374151">${w.value.km ? w.value.km.toFixed(0) : ""}</text><text x="${x + 32}" y="${131 - hh}" font-size="9" text-anchor="middle" fill="#374151">${w.value.h ? w.value.h.toFixed(1) : ""}</text>`;
+    s += `<text x="${x + 21}" y="152" font-size="9" text-anchor="middle" fill="#6b7280">${T.dateLabel(w.week)}</text>`; });
+  document.getElementById("vol").innerHTML = s + "</svg>";
+  document.getElementById("sess").innerHTML = "<tr><th>Date</th><th>Session</th><th>Dist / time</th><th>Avg HR</th><th>Effect</th></tr>" + D.acts.slice(0, 8).map((a) =>
+    `<tr><td>${T.dateLabel(a.date, { weekday: "short", day: "numeric", month: "short" })}</td><td>${T.esc(a.name)}</td><td>${a.sport === "run" || a.sport === "bike" ? T.fmtKm(a.distance_m) + " km" : T.dur(a.duration_s)}</td><td>${a.avg_hr || "–"}</td><td>${a.te_label ? a.te_label.replace(/_/g, " ").toLowerCase() : "–"}</td></tr>`).join("");
+  const since = T.iso(new Date(T.today() - 27 * 86400000)), z = [0, 0, 0, 0, 0];
+  D.acts.filter((a) => a.date >= since && a.zones_s).forEach((a) => a.zones_s.forEach((v, i) => z[i] += v));
+  const tot = T.sum(z) || 1, zc = ["#cbd5e1", "#93c5fd", "#34d399", "#fbbf24", "#ef4444"], easy = (z[0] + z[1]) / tot * 100;
+  document.getElementById("int").innerHTML = `<div class="stack">${z.map((v, i) => `<div style="width:${v / tot * 100}%;background:${zc[i]}" title="Z${i + 1}"></div>`).join("")}</div>
+   <div class="muted">${z.map((v, i) => `Z${i + 1} ${T.hm(v)}`).join(" · ")}</div><p style="font-size:22px;font-weight:700;margin:10px 0 0">${easy.toFixed(0)}% easy <span class="muted">(zones 1–2)</span></p>`;
+  const vd = T.verdict(D), first = name.split(" ")[0];
+  const lines = [`Morning ${first},`, ""];
+  flags.forEach((f) => { if (f.level !== "green") lines.push(`• ${f.text}.`); });
+  if (!n) lines.push("Everything's in range this morning: HRV, sleep, resting HR and form all look good.");
+  lines.push("", vd.call === "Go hard" ? "Go ahead with today's planned session." : vd.call === "Easy day" ? "Let's make today easy: zone 1–2 only, or rest if the legs feel heavy." : "Train today, but cap the intensity: keep the hard reps controlled and cut them short if HR drifts.");
+  if (g.days != null && g.days <= 14) lines.push(`${g.days} days to ${g.name}: nothing new from here, freshness is the priority.`);
+  document.getElementById("note").value = lines.join("\n");
+  document.getElementById("send").onclick = () => { navigator.clipboard && navigator.clipboard.writeText(document.getElementById("note").value); document.getElementById("sent").textContent = "Note copied — ask Claude to update the watch workout."; };
+});
+</script></body></html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Tinkerer</title>
+<style>
+body{margin:0;font:14px system-ui,sans-serif;background:#f6f7f9;color:#1b1f24}
+header{padding:14px 18px;background:#fff;border-bottom:1px solid #e3e6ea;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+h1{font-size:18px;margin:0 12px 0 0}
+.chip{border:1px solid #ccd2d9;border-radius:99px;padding:3px 10px;cursor:pointer;font-size:12px;user-select:none}
+.chip.off{opacity:.35}
+select,input{font:inherit}
+main{display:grid;grid-template-columns:1fr 320px;gap:14px;padding:14px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:12px}
+svg circle{cursor:pointer;stroke:#fff;stroke-width:.6}
+svg circle.sel{stroke:#111;stroke-width:2.5}
+.k{color:#6b7480;font-size:12px}.v{font-size:20px;font-weight:600;margin-bottom:8px}
+.zbar{display:flex;height:18px;border-radius:4px;overflow:hidden;margin:6px 0}
+</style></head><body>
+<header><h1>Run explorer</h1><span id="chips"></span>
+<label class="k">X <select id="x"><option value="hr">Avg HR</option><option value="dist">Distance</option><option value="date">Date</option></select></label>
+<label class="k">Y <select id="y"><option value="pace">Pace</option><option value="hr">Avg HR</option></select></label>
+<label class="k">Min distance <input id="min" type="range" min="0" max="25" step="0.5" value="0"> <b id="minv">0</b> km</label></header>
+<main><div class="card"><svg id="plot" viewBox="0 0 900 560" width="100%"></svg></div>
+<div class="card" id="panel"></div></main>
+<script src="common.js"></script>
+<script>
+const COLORS = ["#2563eb","#dc2626","#16a34a","#d97706","#7c3aed","#0891b2","#db2777","#65a30d","#475569","#ea580c"];
+let D, years, on, sel;
+const val = (r, k) => k === "pace" ? 1000 / r.avg_speed : k === "hr" ? r.avg_hr : k === "dist" ? r.distance_m / 1000 : T.d(r.date).getTime();
+function draw() {
+  const X = document.getElementById("x").value, Y = document.getElementById("y").value, min = +document.getElementById("min").value;
+  document.getElementById("minv").textContent = min;
+  const pts = D.runs.filter((r) => on.has(r.date.slice(0, 4)) && r.distance_m / 1000 >= min && r.avg_speed && (X !== "hr" && Y !== "hr" || r.avg_hr));
+  const svg = document.getElementById("plot"); if (!pts.length) { svg.innerHTML = '<text x="20" y="40">No runs match.</text>'; return; }
+  const xs = pts.map((p) => val(p, X)), ys = pts.map((p) => val(p, Y));
+  const [x0, x1] = [Math.min(...xs), Math.max(...xs)], [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+  const W = 900, H = 560, L = 60, B = 40, sx = (v) => L + ((v - x0) / (x1 - x0 || 1)) * (W - L - 20), sy = (v) => {
+    const f = (v - y0) / (y1 - y0 || 1); return Y === "pace" ? 20 + f * (H - B - 20) : H - B - f * (H - B - 20); };
+  const fmt = (k, v) => k === "pace" ? T.pace(1000 / v) : k === "date" ? new Date(v).getFullYear() : k === "dist" ? v.toFixed(0) + " km" : Math.round(v);
+  let s = "";
+  for (let i = 0; i <= 5; i++) {
+    const vx = x0 + (x1 - x0) * i / 5, vy = y0 + (y1 - y0) * i / 5;
+    s += `<text x="${sx(vx)}" y="${H - 18}" font-size="11" fill="#6b7480" text-anchor="middle">${fmt(X, vx)}</text>`;
+    s += `<line x1="${L}" x2="${W - 20}" y1="${sy(vy)}" y2="${sy(vy)}" stroke="#eef0f3"/><text x="${L - 6}" y="${sy(vy) + 4}" font-size="11" fill="#6b7480" text-anchor="end">${fmt(Y, vy)}</text>`;
+  }
+  s += `<text x="${W / 2}" y="${H - 2}" font-size="12" text-anchor="middle">${document.getElementById("x").selectedOptions[0].text}</text>`;
+  s += `<text x="14" y="${H / 2}" font-size="12" transform="rotate(-90 14 ${H / 2})" text-anchor="middle">${Y === "pace" ? "Pace /km (fast at top)" : "Avg HR"}</text>`;
+  pts.sort((a, b) => b.distance_m - a.distance_m).forEach((p) => {
+    const r = 3 + Math.sqrt(p.distance_m / 1000) * 1.6, c = COLORS[years.indexOf(p.date.slice(0, 4)) % COLORS.length];
+    s += `<circle data-id="${p.id}" cx="${sx(val(p, X))}" cy="${sy(val(p, Y))}" r="${r}" fill="${c}" fill-opacity=".72" class="${sel && sel.id === p.id ? "sel" : ""}"><title>${T.esc(p.name)} · ${T.dateLabel(p.date, {day:"numeric",month:"short",year:"numeric"})}</title></circle>`;
+  });
+  svg.innerHTML = s;
+  svg.querySelectorAll("circle").forEach((c) => c.onclick = () => { sel = D.runs.find((r) => String(r.id) === c.dataset.id); panel(); draw(); });
+}
+function panel() {
+  const r = sel, el = document.getElementById("panel"); if (!r) { el.innerHTML = "Click a dot."; return; }
+  const z = r.zones_s || [], tot = T.sum(z) || 1, zc = ["#94a3b8","#60a5fa","#34d399","#fbbf24","#ef4444"];
+  el.innerHTML = `<div class="k">${T.dateLabel(r.date,{weekday:"short",day:"numeric",month:"long",year:"numeric"})}</div><h2 style="margin:4px 0 12px">${T.esc(r.name)}</h2>
+  <div class="k">Distance</div><div class="v">${T.fmtKm(r.distance_m, 2)} km</div>
+  <div class="k">Pace</div><div class="v">${T.pace(r.avg_speed)} /km</div>
+  <div class="k">Avg HR</div><div class="v">${r.avg_hr || "–"} bpm</div>
+  <div class="k">Training effect</div><div class="v">${r.te_aerobic != null ? r.te_aerobic.toFixed(1) : "–"} aerobic${r.te_label ? " · " + r.te_label.replace(/_/g, " ").toLowerCase() : ""}</div>
+  <div class="k">Time in HR zones</div>${z.length ? `<div class="zbar">${z.map((s, i) => `<div style="width:${s / tot * 100}%;background:${zc[i]}" title="Z${i + 1} ${T.dur(s)}"></div>`).join("")}</div>
+  <div class="k">${z.map((s, i) => `Z${i + 1} ${Math.round(s / 60)}m`).join(" · ")}</div>` : '<div class="k">No zone data</div>'}`;
+}
+T.boot((d) => {
+  D = d; years = [...new Set(D.runs.map((r) => r.date.slice(0, 4)))].sort(); on = new Set(years);
+  document.getElementById("chips").innerHTML = years.map((y, i) => `<span class="chip" data-y="${y}" style="border-color:${COLORS[i % COLORS.length]};color:${COLORS[i % COLORS.length]}">${y}</span>`).join(" ");
+  document.querySelectorAll(".chip").forEach((c) => c.onclick = () => { on.has(c.dataset.y) ? on.delete(c.dataset.y) : on.add(c.dataset.y); c.classList.toggle("off"); draw(); });
+  ["x", "y", "min"].forEach((id) => document.getElementById(id).oninput = draw);
+  const long = D.runs.filter((r) => r.distance_m >= 16093).sort((a, b) => b.avg_speed - a.avg_speed);
+  sel = long[0] || D.runs.slice().sort((a, b) => b.distance_m - a.distance_m)[0];
+  panel(); draw();
+});
+</script></body></html>

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Recovery Nerd</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#1e2530;color:#e7ecf3;font:15px system-ui,sans-serif;display:flex;justify-content:center;padding:18px}
+.wrap{width:100%;max-width:430px}
+.card{background:#28313e;border-radius:18px;padding:16px;margin-bottom:14px}
+.k{color:#93a1b5;font-size:12px;text-transform:uppercase;letter-spacing:.1em}
+.verdict{display:flex;gap:16px;align-items:center}
+.lights{background:#151a21;border-radius:14px;padding:8px;display:flex;flex-direction:column;gap:7px}
+.l{width:28px;height:28px;border-radius:50%;background:#2c333d}
+.on.red{background:#ef4444;box-shadow:0 0 14px #ef4444}.on.amber{background:#f59e0b;box-shadow:0 0 14px #f59e0b}.on.green{background:#22c55e;box-shadow:0 0 14px #22c55e}
+.call{font-size:28px;font-weight:700;margin:4px 0}
+.chip{display:inline-block;background:#3a4556;border-radius:99px;padding:3px 9px;font-size:12px;margin:3px 4px 0 0}
+.stack{display:flex;height:16px;border-radius:6px;overflow:hidden;margin:10px 0 6px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}.two .card{margin:0}
+.big{font-size:30px;font-weight:700}
+</style></head><body><div class="wrap">
+<div class="card"><div class="verdict"><div class="lights"><div class="l red"></div><div class="l amber"></div><div class="l green"></div></div>
+<div><div class="k">Today's call</div><div class="call" id="call"></div><div id="chips"></div></div></div></div>
+<div class="card"><div class="k">HRV · last 30 nights</div><div id="hrv"></div><div class="k" style="font-size:11px" id="hrvn"></div></div>
+<div class="card"><div class="k">Last night's sleep</div><div style="display:flex;gap:18px;margin-top:6px"><div><div class="big" id="sd"></div><div class="k">duration</div></div><div><div class="big" id="ss"></div><div class="k">score</div></div></div>
+<div class="stack" id="stack"></div><div class="k" style="font-size:11px" id="stg"></div></div>
+<div class="two"><div class="card"><div class="k">Body Battery</div><div class="big" id="bb"></div><div id="bbs"></div></div>
+<div class="card"><div class="k">Resting HR</div><div class="big" id="rhr"></div><div id="rhrs"></div></div></div>
+</div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const v = D.vitals, vd = T.verdict(D);
+  document.querySelector(".l." + vd.light).classList.add("on");
+  document.getElementById("call").textContent = vd.call;
+  document.getElementById("chips").innerHTML = vd.reasons.length ? vd.reasons.map((r) => `<span class="chip">${r}</span>`).join("") : '<span class="chip">All signals green</span>';
+  const h30 = T.series(D.hrvBy, 30, (r) => r.last_night);
+  document.getElementById("hrv").innerHTML = T.lines([{ vals: h30, color: "#60a5fa", width: 2.2, dots: true }],
+    { w: 400, h: 150, band: v.hrvLow != null ? [v.hrvLow, v.hrvHigh] : null, text: "#93a1b5", grid: "rgba(255,255,255,.05)", bandColor: "rgba(34,197,94,.15)" });
+  document.getElementById("hrvn").textContent = v.hrv != null ? `Last night ${Math.round(v.hrv)} ms · baseline ${v.hrvLow ?? "?"}–${v.hrvHigh ?? "?"} ms (shaded)` : "";
+  const s = v.sleep || {};
+  document.getElementById("sd").textContent = T.dur(v.sleepS);
+  document.getElementById("ss").textContent = v.sleepScore ?? "–";
+  const st = [["Deep", s.deep_s, "#6366f1"], ["REM", s.rem_s, "#a855f7"], ["Light", s.light_s, "#60a5fa"], ["Awake", s.awake_s, "#f87171"]], tot = T.sum(st.map((x) => x[1])) || 1;
+  document.getElementById("stack").innerHTML = st.map((x) => `<div style="width:${(x[1] || 0) / tot * 100}%;background:${x[2]}"></div>`).join("");
+  document.getElementById("stg").innerHTML = st.map((x) => `<span style="color:${x[2]}">■</span> ${x[0]} ${T.dur(x[1])}`).join(" &nbsp; ");
+  document.getElementById("bb").textContent = v.bb ?? "–";
+  document.getElementById("bbs").innerHTML = T.spark(T.series(D.bbBy, 30, (r) => r.high), "#22c55e", 170, 34);
+  document.getElementById("rhr").textContent = v.rhr != null ? v.rhr : "–";
+  document.getElementById("rhrs").innerHTML = T.spark(T.series(D.rhrBy, 30), "#f87171", 170, 34);
+});
+</script></body></html>

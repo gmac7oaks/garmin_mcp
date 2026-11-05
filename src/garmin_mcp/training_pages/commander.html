@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Commander</title>
+<style>
+:root{--g:#39ff88;--c:#22e3ff;--a:#ffb020;--r:#ff4d5e;--v:#b388ff;--t:#8b97a8}
+*{box-sizing:border-box}body{margin:0;background:#07090c;background-image:radial-gradient(rgba(255,255,255,.07) 1px,transparent 1px);background-size:18px 18px;color:#e6edf3;font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:16px}
+.top{display:flex;flex-wrap:wrap;gap:18px;align-items:center;border:1px solid #1d2733;padding:10px 14px;border-radius:8px;background:rgba(10,14,20,.85)}
+.top h1{font-size:16px;margin:0;letter-spacing:.2em;color:var(--g)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--g);display:inline-block;box-shadow:0 0 10px var(--g);animation:p 1.4s infinite;margin-right:6px}
+@keyframes p{50%{opacity:.25}}
+.lbl{color:var(--t);font-size:11px;text-transform:uppercase;letter-spacing:.12em}
+.grid6{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:14px 0}
+.tile{border:1px solid #1d2733;background:rgba(10,14,20,.9);border-radius:8px;padding:12px}
+.big{font-size:30px;font-weight:700;margin:4px 0}
+.sub{color:var(--t);font-size:11px}
+.row3{display:grid;grid-template-columns:2fr 2fr 1.4fr;gap:12px;margin-top:12px}
+@media(max-width:900px){.row3{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:12px}td{padding:4px 2px;border-bottom:1px solid #141c26}
+.alert{border-color:var(--a);background:rgba(255,176,32,.08)}.alert .big{font-size:15px;line-height:1.4;color:var(--a)}
+#refresh{margin-left:auto;color:var(--c);font-size:11px}
+</style></head><body>
+<div class="top"><h1>GARMIN // COMMANDER</h1><span><span class="dot"></span><span style="color:var(--g)">GARMIN LIVE</span></span>
+<span class="lbl">sync <b id="sync" style="color:#e6edf3"></b></span><span class="lbl">race <b id="race" style="color:var(--a)"></b></span>
+<span class="lbl">activities <b id="count" style="color:var(--c)"></b></span><span id="refresh">↻ refresh</span></div>
+<div class="grid6" id="tiles"></div>
+<div class="tile"><div class="lbl">Fitness / Fatigue / Form — last 120 days</div><div id="ffm"></div>
+<div class="sub"><span style="color:var(--c)">■ fitness (42-day load)</span> &nbsp; <span style="color:var(--v)">■ fatigue (7-day load)</span> &nbsp; <span style="color:var(--g)">■ form</span></div></div>
+<div class="row3">
+<div class="tile"><div class="lbl">Weekly run km — 16 weeks</div><div id="weeks"></div></div>
+<div class="tile"><div class="lbl">Last 7 activities</div><table id="log"></table></div>
+<div class="tile alert"><div class="lbl" style="color:var(--a)">⚠ system alert</div><div class="big" id="alert"></div></div>
+</div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const v = D.vitals, g = T.goal(D);
+  document.getElementById("sync").textContent = new Date(D.updated).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
+  document.getElementById("race").textContent = g.days != null ? `${g.name} T-${g.days}d` : g.name;
+  document.getElementById("count").textContent = D.acts.length;
+  T.refreshButton(document.getElementById("refresh"));
+  const bb30 = T.series(D.bbBy, 30, (r) => r.high), hrv30 = T.series(D.hrvBy, 30, (r) => r.last_night);
+  const rhr30 = T.series(D.rhrBy, 30), sl30 = T.series(D.sleepBy, 30, (r) => r.score), st30 = T.series(D.stressBy, 30);
+  const tiles = [
+    ["Body Battery", v.bb ?? "–", `high today ${v.bbHigh ?? "–"}`, bb30, "var(--g)"],
+    ["HRV last night", v.hrv != null ? Math.round(v.hrv) + " ms" : "–", v.hrvLow != null ? `baseline ${v.hrvLow}–${v.hrvHigh}` : (v.hrvStatus || ""), hrv30, "var(--c)"],
+    ["Resting HR", v.rhr != null ? v.rhr + " bpm" : "–", v.rhr7 != null ? `7-day avg ${Math.round(v.rhr7)}` : "", rhr30, "var(--r)"],
+    ["Sleep", T.dur(v.sleepS), v.sleepScore != null ? `score ${v.sleepScore}` : "", sl30, "var(--v)"],
+    ["Stress", v.stress ?? "–", "avg today", st30, "var(--a)"],
+    ["Fitness age", v.fitAge != null ? Math.round(v.fitAge) : "–", v.age ? `actual ${v.age}` : "", null, "var(--g)"],
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map((t) =>
+    `<div class="tile"><div class="lbl">${t[0]}</div><div class="big" style="color:${t[4]}">${t[1]}</div><div class="sub">${t[2]}</div>${t[3] ? T.spark(t[3], t[4].replace("var(--g)", "#39ff88").replace("var(--c)", "#22e3ff").replace("var(--r)", "#ff4d5e").replace("var(--v)", "#b388ff").replace("var(--a)", "#ffb020"), 150, 30) : ""}</div>`).join("");
+  const F = D.form;
+  document.getElementById("ffm").innerHTML = T.lines([
+    { vals: F.map((x) => x.fitness), color: "#22e3ff", width: 2.2 },
+    { vals: F.map((x) => x.fatigue), color: "#b388ff", width: 1.4 },
+    { vals: F.map((x) => x.form), color: "#39ff88", width: 1.8, fill: "rgba(57,255,136,.08)" },
+  ], { h: 220, zero: true, text: "#8b97a8", labels: F.map((x, i) => (i % 20 === 0 ? T.dateLabel(x.date) : "")) });
+  const wk = T.weekly(D.runs, 16, (a) => T.sum(a.map((r) => r.distance_m)) / 1000);
+  document.getElementById("weeks").innerHTML = T.bars(wk.map((w) => w.value), { color: "#22e3ff", labels: wk.map((w) => T.dateLabel(w.week)), text: "#8b97a8" });
+  document.getElementById("log").innerHTML = D.acts.slice(0, 7).map((a) =>
+    `<tr><td class="sub">${T.dateLabel(a.date)}</td><td>${T.esc(a.name)}</td><td style="color:var(--c)">${a.distance_m ? T.fmtKm(a.distance_m) + " km" : T.dur(a.duration_s)}</td><td class="sub">${a.avg_hr || ""}</td></tr>`).join("");
+  const flags = T.flags(D).filter((f) => f.level !== "green").sort((a, b) => (a.level === "red" ? -1 : 1));
+  document.getElementById("alert").textContent = flags.length ? flags[0].text + (flags[0].level === "red" ? " — the biggest outlier today, so keep the session controlled." : " — worth watching today.") : "All systems nominal: HRV, sleep, resting HR and form are all in range.";
+});
+</script></body></html>
