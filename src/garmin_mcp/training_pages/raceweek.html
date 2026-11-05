@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Race Week</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f4ef;color:#1d2433;font:14px system-ui,sans-serif;padding:20px}
+.top{display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;margin-bottom:16px}
+.cd{font-size:84px;font-weight:800;line-height:.85;color:#d9480f}.cdl{font-size:13px;text-transform:uppercase;letter-spacing:.14em;color:#6b7280}
+h1{margin:0;font-size:30px}.sub{color:#6b7280}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+h3{margin:0 0 10px;font-size:15px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 4px;border-bottom:1px solid #eef0f3;text-align:right}th{color:#6b7280;font-weight:500}td:first-child,th:first-child{text-align:left}
+.big{font-size:30px;font-weight:700}.muted{color:#6b7280;font-size:12px}
+.pill{display:inline-block;border-radius:99px;padding:3px 10px;font-weight:600;font-size:12px}
+.ok{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e}.bad{background:#fee2e2;color:#991b1b}
+input{font:inherit;width:70px;padding:3px 6px;border:1px solid #d1d5db;border-radius:6px}
+li{margin:4px 0}
+</style></head><body>
+<div class="top"><div><div class="cd" id="cd"></div><div class="cdl">days to go</div></div><div><h1 id="race"></h1><div class="sub" id="when"></div></div></div>
+<div class="grid">
+<div class="card"><h3>Pace plan · goal <input id="goal" value="39:50"></h3><div id="plan"></div></div>
+<div class="card"><h3>Garmin's prediction</h3><div id="pred"></div></div>
+<div class="card"><h3>Form into race day</h3><div id="form"></div><div class="muted" id="formn"></div></div>
+<div class="card"><h3>Race morning weather</h3><div id="wx">Loading…</div></div>
+<div class="card"><h3>Sessions until the race</h3><div id="taper"></div></div>
+<div class="card"><h3>Fuel and kit</h3><div id="fuel"></div></div>
+</div>
+<script src="common.js"></script>
+<script>
+const sec = (s) => { const [m, x] = String(s).split(":").map(Number); return m * 60 + (x || 0); };
+const mmss = (s) => { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+T.boot((D) => {
+  const cal = D.calendar || { events: [], scheduled: [] };
+  const ev = cal.events.find((e) => e.primary) || cal.events.find((e) => e.race) || {};
+  const g = T.goal(D), name = T.qs.get("race") || ev.title || g.name, date = T.qs.get("date") || ev.date || g.date;
+  const km = +(T.qs.get("km") || (ev.distance_m ? ev.distance_m / 1000 : 10));
+  const days = date ? T.daysBetween(T.today(), T.d(date)) : null;
+  document.getElementById("cd").textContent = days != null ? Math.max(days, 0) : "–";
+  document.getElementById("race").textContent = name;
+  document.getElementById("when").textContent = date ? `${T.dateLabel(date, { weekday: "long", day: "numeric", month: "long" })} · ${km} km${ev.location ? " · " + ev.location : ""}` : "Add the race to your Garmin calendar";
+  // Pace plan
+  const goalEl = document.getElementById("goal"); goalEl.value = T.qs.get("goal") || goalEl.value;
+  const plan = () => {
+    const tot = sec(goalEl.value), p = tot / km; let rows = "", cum = 0;
+    for (let k = 1; k <= Math.ceil(km); k++) { const d = Math.min(1, km - k + 1); cum += p * d; rows += `<tr><td>Km ${k}${d < 1 ? ` (${d.toFixed(2)})` : ""}</td><td>${mmss(p)}</td><td>${mmss(cum)}</td></tr>`; }
+    document.getElementById("plan").innerHTML = `<div class="big">${mmss(p)}/km</div><div class="muted">Even splits. Halfway in ${mmss(tot / 2)}. Hold back on km 1, the crowd makes it feel easy.</div><table><tr><th>Split</th><th>Pace</th><th>Clock</th></tr>${rows}</table>`;
+  };
+  goalEl.oninput = plan; plan();
+  // Prediction
+  const rp = D.race_predictions || {}, key = km <= 5.5 ? "5k" : km <= 12 ? "10k" : km <= 25 ? "half" : "marathon", now = rp[key];
+  if (now) {
+    const target = sec(goalEl.value), gap = target - now, cls = gap >= 0 ? "ok" : gap > -30 ? "warn" : "bad";
+    const hist = (rp.history || []).filter((h) => h[key]);
+    document.getElementById("pred").innerHTML = `<div class="big">${mmss(now)}</div><span class="pill ${cls}">${gap >= 0 ? mmss(gap) + " inside" : mmss(-gap) + " outside"} your ${goalEl.value} goal</span>`
+      + (hist.length > 1 ? T.lines([{ vals: hist.map((h) => h[key]), color: "#d9480f", width: 2 }], { w: 520, h: 150, text: "#6b7280", fmt: mmss, band: [target - 1, target + 1], bandColor: "rgba(22,101,52,.5)", labels: hist.map((h, i) => i % Math.ceil(hist.length / 6) ? "" : T.dateLabel(h.date)) })
+        + `<div class="muted">Predicted ${key.toUpperCase()} time over ${hist.length} days; the green line is your goal.</div>` : "");
+  } else document.getElementById("pred").textContent = "No Garmin prediction available.";
+  // Form projection: taper at half the recent daily load
+  const f = D.form, last = f[f.length - 1];
+  if (last && days != null && days >= 0) {
+    const avg = T.mean(f.slice(-28).map((x) => x.load)) || 0, taper = +(T.qs.get("taper") || 0.5) * avg;
+    let fit = last.fitness, fat = last.fatigue; const proj = [];
+    for (let i = 1; i <= days; i++) { fit += (taper - fit) / 42; fat += (taper - fat) / 7; proj.push(fit - fat); }
+    const past = f.slice(-28).map((x) => x.form), vals = past.concat(proj);
+    document.getElementById("form").innerHTML = T.lines([{ vals: past.concat(proj.map(() => null)), color: "#1d4ed8", width: 2 }, { vals: past.map((_, i) => i === past.length - 1 ? past[i] : null).concat(proj), color: "#d9480f", width: 2 }], { w: 520, h: 160, zero: true, text: "#6b7280" });
+    const raceForm = proj.length ? proj[proj.length - 1] : last.form;
+    document.getElementById("formn").innerHTML = `Today ${last.form >= 0 ? "+" : ""}${last.form.toFixed(0)} → race day about <b>${raceForm >= 0 ? "+" : ""}${raceForm.toFixed(0)}</b> if you train at half your recent load (orange). Positive means fresh.`;
+  }
+  // Taper sessions
+  const sch = (cal.scheduled || []).filter((w) => !date || w.date <= date);
+  document.getElementById("taper").innerHTML = sch.length ? `<table>${sch.map((w) => `<tr><td>${T.dateLabel(w.date, { weekday: "short", day: "numeric", month: "short" })}</td><td style="text-align:left">${T.esc(w.title)}</td></tr>`).join("")}</table>` : "Nothing scheduled in Garmin before the race.";
+  // Fuel
+  const kg = ((D.weight || []).slice(-1)[0] || {}).kg || 84;
+  document.getElementById("fuel").innerHTML = `<ul>
+    <li><b>Day before:</b> about ${Math.round(kg * 6)}–${Math.round(kg * 8)} g carbs (6–8 g/kg at ${kg} kg). Keep fibre and fat low.</li>
+    <li><b>Breakfast 2½–3 h before:</b> about ${Math.round(kg * 1.5)} g carbs, familiar food only.</li>
+    <li><b>For ${km} km:</b> ${km <= 12 ? "no gels needed; a sip of water at the start is enough." : "a gel every 30–40 min from 40 min in."}</li>
+    <li><b>Kit check:</b> race shoes with a few runs in them, number and pins, watch charged, workout loaded.</li></ul><div class="muted">General guidance, not a personal prescription.</div>`;
+  // Weather (Open-Meteo, no key) for race morning
+  const lat = +(T.qs.get("lat") || 51.1757), lon = +(T.qs.get("lon") || 0.4936), hour = +(T.qs.get("hour") || 9);
+  if (!date || days > 15) { document.getElementById("wx").textContent = "The forecast opens 16 days before the race."; return; }
+  fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,apparent_temperature,precipitation_probability,wind_speed_10m,wind_direction_10m&wind_speed_unit=mph&timezone=Europe%2FLondon&start_date=${date}&end_date=${date}`)
+    .then((r) => r.json()).then((w) => {
+      const h = w.hourly, rows = [hour - 1, hour, hour + 1].filter((i) => h.time[i]).map((i) => `<tr><td>${h.time[i].slice(11)}</td><td>${Math.round(h.temperature_2m[i])}°C (feels ${Math.round(h.apparent_temperature[i])}°C)</td><td>${h.precipitation_probability[i]}% rain</td><td>${Math.round(h.wind_speed_10m[i])} mph</td></tr>`).join("");
+      const t = h.temperature_2m[hour];
+      document.getElementById("wx").innerHTML = `<table><tr><th>Time</th><th>Temp</th><th>Rain</th><th>Wind</th></tr>${rows}</table><div class="muted">${t < 8 ? "Cold: arm warmers or a throwaway top for the start." : t > 16 ? "Warm for racing: take water early." : "Good racing temperature."} Forecast from Open-Meteo for Marden.</div>`;
+    }).catch(() => { document.getElementById("wx").textContent = "Weather forecast unavailable."; });
+});
+</script></body></html>

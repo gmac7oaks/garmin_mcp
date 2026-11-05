@@ -213,7 +213,7 @@
     if (o.band) s += `<rect x="30" width="${o.w - 40}" y="${Y(o.band[1])}" height="${Y(o.band[0]) - Y(o.band[1])}" fill="${o.bandColor || "rgba(120,200,160,.15)"}"/>`;
     for (let g = 0; g <= 4; g++) {
       const v = lo + ((hi - lo) * g) / 4;
-      s += `<line x1="30" x2="${o.w - 10}" y1="${Y(v)}" y2="${Y(v)}" stroke="${o.grid || "rgba(128,128,128,.15)"}"/><text x="26" y="${Y(v) + 3}" font-size="9" text-anchor="end" fill="${o.text}">${v.toFixed(0)}</text>`;
+      s += `<line x1="30" x2="${o.w - 10}" y1="${Y(v)}" y2="${Y(v)}" stroke="${o.grid || "rgba(128,128,128,.15)"}"/><text x="26" y="${Y(v) + 3}" font-size="9" text-anchor="end" fill="${o.text}">${o.fmt ? o.fmt(v) : v.toFixed(0)}</text>`;
     }
     if (o.zero) s += `<line x1="30" x2="${o.w - 10}" y1="${Y(0)}" y2="${Y(0)}" stroke="${o.text}" stroke-dasharray="3 3"/>`;
     series.forEach((se) => {

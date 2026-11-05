@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Running Form</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#111827;font:14px system-ui,sans-serif;padding:20px}
+h1{margin:0;font-size:24px}.sub{color:#6b7280;margin:2px 0 14px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}@media(max-width:900px){.tiles,.grid{grid-template-columns:1fr 1fr!important}}
+.tile{border:1px solid #e5e7eb;border-radius:12px;padding:12px}.tile .k{font-size:12px;color:#6b7280}.tile .v{font-size:28px;font-weight:700}.tile .n{font-size:12px}
+.up{color:#15803d}.down{color:#b91c1c}.flat{color:#6b7280}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:12px}h3{margin:0 0 6px;font-size:14px}
+.muted{color:#6b7280;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 4px;border-bottom:1px solid #f1f5f9;text-align:right}th{color:#6b7280;font-weight:500}td:first-child,th:first-child{text-align:left}
+</style></head><body>
+<h1>Running form</h1><div class="sub" id="sub"></div>
+<div class="tiles" id="tiles"></div>
+<div class="grid">
+<div class="card"><h3>Cadence (steps/min)</h3><div id="c1"></div><div class="muted">Shaded 170–180. Dots are runs, the line is the 4-week average.</div></div>
+<div class="card"><h3>Cadence vs pace</h3><div id="c2"></div><div class="muted">Cadence rises with speed, so compare runs at similar pace. Recent 4 weeks in orange.</div></div>
+<div class="card"><h3>Ground contact time (ms)</h3><div id="c3"></div><div class="muted">Lower is generally more efficient.</div></div>
+<div class="card"><h3>Vertical ratio (%)</h3><div id="c4"></div><div class="muted">Bounce per stride length. Lower is better; under 8% is good.</div></div>
+<div class="card" style="grid-column:1/-1"><h3>Last 12 runs</h3><table id="tbl"></table></div>
+</div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const since = T.iso(new Date(T.today() - 180 * 86400000));
+  const runs = D.runs.filter((r) => r.date >= since && r.cadence && r.avg_speed).sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!runs.length) { document.getElementById("sub").textContent = "No runs with cadence in the last 6 months."; return; }
+  const days = T.days(180), by = (k) => { const o = {}; runs.forEach((r) => { if (r[k] != null) (o[r.date] = o[r.date] || []).push(r[k]); }); return o; };
+  const roll = (o) => days.map((d, i) => T.mean(days.slice(Math.max(0, i - 27), i + 1).flatMap((x) => o[x] || [])));
+  const dots = (o) => days.map((d) => o[d] ? T.mean(o[d]) : null);
+  const chart = (k, color, band, dp = 0) => { const o = by(k); return T.lines([{ vals: dots(o), color: "#cbd5e1", width: 0, dots: true }, { vals: roll(o), color, width: 2.5 }], { w: 440, h: 170, band, fmt: (v) => v.toFixed(dp), bandColor: "rgba(34,197,94,.12)", text: "#6b7280", labels: days.map((d, i) => i % 30 ? "" : T.dateLabel(d)) }); };
+  document.getElementById("c1").innerHTML = chart("cadence", "#2563eb", [170, 180]);
+  document.getElementById("c3").innerHTML = chart("gct_ms", "#9333ea");
+  document.getElementById("c4").innerHTML = chart("vert_ratio", "#ea580c", null, 1);
+  // scatter cadence vs pace
+  const W = 440, H = 200, ps = runs.map((r) => 1000 / r.avg_speed), cs = runs.map((r) => r.cadence);
+  const p0 = Math.min(...ps), p1 = Math.max(...ps), c0 = Math.min(...cs) - 2, c1 = Math.max(...cs) + 2;
+  const X = (p) => 40 + (p1 - p) / (p1 - p0 || 1) * (W - 50), Y = (c) => 10 + (c1 - c) / (c1 - c0 || 1) * (H - 40);
+  const recent = T.iso(new Date(T.today() - 28 * 86400000));
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+  [c0, (c0 + c1) / 2, c1].forEach((c) => s += `<text x="34" y="${Y(c) + 3}" font-size="9" text-anchor="end" fill="#6b7280">${Math.round(c)}</text>`);
+  [p1, (p0 + p1) / 2, p0].forEach((p) => s += `<text x="${X(p)}" y="${H - 8}" font-size="9" text-anchor="middle" fill="#6b7280">${T.pace(1000 / p)}</text>`);
+  runs.forEach((r) => s += `<circle cx="${X(1000 / r.avg_speed)}" cy="${Y(r.cadence)}" r="${2.5 + Math.sqrt(r.distance_m / 1000)}" fill="${r.date >= recent ? "#ea580c" : "#94a3b8"}" fill-opacity=".7"><title>${T.esc(r.name)} · ${T.dateLabel(r.date)} · ${Math.round(r.cadence)} spm</title></circle>`);
+  document.getElementById("c2").innerHTML = s + "</svg>";
+  // tiles: last 4 weeks vs previous 4, easy runs only for cadence comparability
+  const win = (a, b, k) => T.mean(runs.filter((r) => { const n = T.daysBetween(T.d(r.date), T.today()); return n >= a && n < b && r[k] != null; }).map((r) => r[k]));
+  const tile = (label, k, unit, dp, betterUp) => { const now = win(0, 28, k), prev = win(28, 56, k); if (now == null) return ""; const d = prev == null ? 0 : now - prev, good = betterUp ? d > 0 : d < 0;
+    return `<div class="tile"><div class="k">${label} · last 4 weeks</div><div class="v">${now.toFixed(dp)}${unit}</div><div class="n ${Math.abs(d) < Math.pow(10, -dp) ? "flat" : good ? "up" : "down"}">${prev == null ? "no data the 4 weeks before" : (d >= 0 ? "+" : "") + d.toFixed(dp) + unit + " vs the 4 weeks before"}</div></div>`; };
+  document.getElementById("tiles").innerHTML = tile("Cadence", "cadence", " spm", 0, true) + tile("Stride", "stride_cm", " cm", 0, true) + tile("Ground contact", "gct_ms", " ms", 0, false) + tile("Vertical ratio", "vert_ratio", "%", 1, false);
+  document.getElementById("sub").textContent = `${runs.length} runs with cadence in the last 6 months. Ground contact and vertical ratio need a running-dynamics-capable watch or HRM.`;
+  document.getElementById("tbl").innerHTML = "<tr><th>Date</th><th>Run</th><th>km</th><th>Pace</th><th>Cadence</th><th>Stride</th><th>GCT</th><th>V. ratio</th></tr>" + runs.slice(-12).reverse().map((r) =>
+    `<tr><td>${T.dateLabel(r.date, { weekday: "short", day: "numeric", month: "short" })}</td><td style="text-align:left">${T.esc(r.name.replace("Sevenoaks - ", ""))}</td><td>${T.fmtKm(r.distance_m)}</td><td>${T.pace(r.avg_speed)}</td><td>${Math.round(r.cadence)}</td><td>${r.stride_cm ? Math.round(r.stride_cm) + " cm" : "–"}</td><td>${r.gct_ms ? Math.round(r.gct_ms) + " ms" : "–"}</td><td>${r.vert_ratio ? r.vert_ratio.toFixed(1) + "%" : "–"}</td></tr>`).join("");
+});
+</script></body></html>
