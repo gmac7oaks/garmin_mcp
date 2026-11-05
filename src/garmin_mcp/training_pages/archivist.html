@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Archivist</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Mono&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3ead7;color:#231d14;font:14px "IBM Plex Mono",ui-monospace,monospace;padding:26px}
+.mast{font-family:"Playfair Display",Georgia,serif;font-weight:900;font-size:64px;text-align:center;margin:0;letter-spacing:-.01em}
+.rule{border-top:4px double #231d14;border-bottom:1px solid #231d14;height:6px;margin:6px 0 4px}
+.dl{text-align:center;font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:16px}
+.tot{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #231d14;border-bottom:1px solid #231d14;margin-bottom:18px}
+.tot div{padding:10px;text-align:center;border-right:1px solid #231d14}.tot div:last-child{border:0}
+.tot b{display:block;font-family:"Playfair Display",serif;font-size:38px}
+.cols{display:grid;grid-template-columns:2.3fr 1fr;gap:22px}@media(max-width:900px){.cols{grid-template-columns:1fr}.tot{grid-template-columns:repeat(2,1fr)}.mast{font-size:40px}}
+h2{font-family:"Playfair Display",serif;font-size:22px;border-bottom:1px solid #231d14;margin:0 0 10px;padding-bottom:4px}
+.rec{border-bottom:1px dotted #8a7a5c;padding:8px 0}.rec .k{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#6b5c40}.rec .v{font-family:"Playfair Display",serif;font-size:20px}
+.split{display:flex;height:26px;border:1px solid #231d14;margin:8px 0}
+.yr{display:flex;align-items:center;gap:8px;margin:3px 0}.yr span{width:44px;font-size:12px}.yr em{font-style:normal;font-size:11px;width:70px;text-align:right}
+</style></head><body>
+<h1 class="mast">The Training Archive</h1><div class="rule"></div><div class="dl" id="dl"></div>
+<div class="tot" id="tot"></div>
+<div class="cols"><div><h2>Every day, every year</h2><div id="heat"></div><h2 style="margin-top:18px">What I did</h2><div class="split" id="split"></div><div id="splitk" style="font-size:12px"></div></div>
+<div><h2>Records</h2><div id="recs"></div></div></div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const A = D.acts, first = A.length ? A[A.length - 1].date : T.iso(T.today());
+  document.getElementById("dl").textContent = `Since ${T.dateLabel(first, { day: "numeric", month: "long", year: "numeric" })} · Edition of ${T.today().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`;
+  const mins = {}; A.forEach((a) => mins[a.date] = (mins[a.date] || 0) + (a.duration_s || 0) / 60);
+  const runKm = T.sum(D.runs.map((r) => r.distance_m)) / 1000, hrs = T.sum(A.map((a) => a.moving_s || a.duration_s)) / 3600;
+  document.getElementById("tot").innerHTML = [["Activities", A.length.toLocaleString()], ["Km run", Math.round(runKm).toLocaleString()], ["Hours moving", Math.round(hrs).toLocaleString()], ["Active days", Object.keys(mins).length.toLocaleString()]].map((x) => `<div><b>${x[1]}</b>${x[0]}</div>`).join("");
+  const years = [...new Set(A.map((a) => +a.date.slice(0, 4)))].sort((a, b) => b - a);
+  const shade = (m) => !m ? "#e6dbc3" : m < 30 ? "#c9b48a" : m < 60 ? "#a3875a" : m < 120 ? "#6f5530" : "#3a2a12";
+  let h = "";
+  years.forEach((y) => { let row = '<svg viewBox="0 0 740 16" width="100%" style="flex:1">';
+    for (let i = 0; i < 366; i++) { const d = new Date(y, 0, 1 + i); if (d.getFullYear() !== y) break; const key = T.iso(d);
+      row += `<rect x="${i * 2.02}" y="1" width="1.7" height="14" fill="${shade(mins[key])}"><title>${key} · ${Math.round(mins[key] || 0)} min</title></rect>`; }
+    const yh = T.sum(Object.entries(mins).filter(([k]) => k.startsWith(y)).map(([, v]) => v)) / 60;
+    h += `<div class="yr"><span>${y}</span>${row}</svg><em>${Math.round(yh)} h</em></div>`; });
+  document.getElementById("heat").innerHTML = h;
+  const longRun = D.runs.slice().sort((a, b) => b.distance_m - a.distance_m)[0];
+  const climb = A.filter((a) => a.ascent_m).sort((a, b) => b.ascent_m - a.ascent_m)[0];
+  const months = {}; A.forEach((a) => months[a.date.slice(0, 7)] = (months[a.date.slice(0, 7)] || 0) + (a.duration_s || 0) / 3600);
+  const bigM = Object.entries(months).sort((a, b) => b[1] - a[1])[0];
+  const days = Object.keys(mins).sort(); let best = 0, cur = 0, prev = null, bestEnd = null;
+  days.forEach((d) => { cur = prev && T.daysBetween(T.d(prev), T.d(d)) === 1 ? cur + 1 : 1; if (cur > best) { best = cur; bestEnd = d; } prev = d; });
+  const recs = [["Longest run", longRun ? `${T.fmtKm(longRun.distance_m)} km` : "–", longRun ? `${T.esc(longRun.name)}, ${T.dateLabel(longRun.date, { day: "numeric", month: "short", year: "numeric" })}` : ""],
+    ["Most climbing", climb ? `${Math.round(climb.ascent_m)} m` : "–", climb ? `${T.esc(climb.name)}, ${T.dateLabel(climb.date, { day: "numeric", month: "short", year: "numeric" })}` : ""],
+    ["Biggest month", bigM ? `${bigM[1].toFixed(0)} hours` : "–", bigM ? T.d(bigM[0] + "-15").toLocaleDateString("en-GB", { month: "long", year: "numeric" }) : ""],
+    ["Longest streak", `${best} day${best === 1 ? "" : "s"} in a row`, bestEnd ? "ending " + T.dateLabel(bestEnd, { day: "numeric", month: "short", year: "numeric" }) : ""]];
+  document.getElementById("recs").innerHTML = recs.map((r) => `<div class="rec"><div class="k">${r[0]}</div><div class="v">${r[1]}</div><div style="font-size:12px">${r[2]}</div></div>`).join("");
+  const cats = ["run", "bike", "lift", "swim"], col = { run: "#3a2a12", bike: "#6f5530", lift: "#a3875a", swim: "#c9b48a", other: "#e6dbc3" }, cnt = { run: 0, bike: 0, lift: 0, swim: 0, other: 0 };
+  A.forEach((a) => cnt[cats.includes(a.sport) ? a.sport : "other"]++);
+  document.getElementById("split").innerHTML = Object.entries(cnt).map(([k, v]) => `<div style="width:${v / A.length * 100}%;background:${col[k]}"></div>`).join("");
+  document.getElementById("splitk").innerHTML = Object.entries(cnt).map(([k, v]) => `<span style="color:${col[k]}">■</span> ${k} ${(v / A.length * 100).toFixed(0)}%`).join(" &nbsp; ");
+});
+</script></body></html>

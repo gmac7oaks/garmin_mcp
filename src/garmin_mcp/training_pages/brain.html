@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Brain</title>
+<style>
+:root{--gold:#f5c542;--grn:#4ade80;--mut:#8a84a3}
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}
+body{background:radial-gradient(ellipse at 50% 40%,#2a1640 0%,#120a1f 45%,#06040b 100%);color:#e9e4f5;font:12px ui-monospace,Menlo,Consolas,monospace}
+canvas{position:absolute;inset:0}
+.bar{position:absolute;top:0;left:0;right:0;display:flex;gap:18px;align-items:center;padding:10px 16px;background:rgba(10,6,18,.6);border-bottom:1px solid rgba(245,197,66,.2);z-index:2}
+.bar b{color:var(--gold);letter-spacing:.25em}.gd{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold)}
+.rail{position:absolute;top:52px;bottom:90px;width:250px;padding:12px;z-index:2;overflow:auto}
+.L{left:12px}.R{right:12px}
+.box{background:rgba(18,10,30,.72);border:1px solid rgba(245,197,66,.18);border-radius:8px;padding:10px;margin-bottom:10px}
+.h{color:var(--mut);text-transform:uppercase;letter-spacing:.15em;font-size:10px;margin-bottom:6px}
+.ns{font-size:46px;color:var(--gold);font-weight:700;line-height:1}
+.vr{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.ok{color:var(--grn)}.warn{color:#fbbf24}.bad{color:#f87171}
+.btn{display:block;width:100%;text-align:left;margin:4px 0;padding:6px 8px;background:rgba(245,197,66,.07);border:1px solid rgba(245,197,66,.25);color:#e9e4f5;border-radius:6px;font:inherit;cursor:pointer;text-decoration:none}
+.btn:hover{background:rgba(245,197,66,.18)}
+input{width:100%;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.12);color:#fff;padding:6px;border-radius:6px;font:inherit}
+.bottom{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);text-align:center;z-index:2}
+.bottom .n{font-size:40px;color:var(--gold);font-weight:700;text-shadow:0 0 18px rgba(245,197,66,.5)}
+#callout{position:absolute;z-index:3;pointer-events:none;background:rgba(18,10,30,.9);border:1px solid var(--gold);border-radius:6px;padding:6px 8px;font-size:11px}
+@media(max-width:900px){.rail{display:none}}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="bar"><span class="gd"></span><b>ATHLETE · OS</b><span id="status" style="color:var(--mut)"></span><span id="clock" style="margin-left:auto;color:var(--gold)"></span></div>
+<div class="rail L">
+ <div class="box"><div class="h">North star</div><div class="ns" id="ns"></div><div id="nsname" style="color:var(--mut)"></div></div>
+ <div class="box"><div class="h">Body vitals</div><div id="vitals"></div></div>
+ <div class="box"><div class="h">Top directives today</div><ol id="dirs" style="margin:0;padding-left:16px;line-height:1.6"></ol></div>
+</div>
+<div class="rail R">
+ <div class="box"><div class="h">Command deck</div><div id="deck"></div><a class="btn" style="text-align:center;margin-top:8px" id="newchat">+ new OS chat</a></div>
+ <div class="box"><div class="h">Search</div><input id="q" placeholder="find an activity…"><div id="hits" style="margin-top:6px"></div></div>
+ <div class="box"><div class="h">Legend</div><div id="legend"></div></div>
+</div>
+<div class="bottom"><div class="h">Primary directive · days to the start line</div><div class="n" id="cd"></div></div>
+<div id="callout"></div>
+<script src="common.js"></script>
+<script>
+const COL = { run: "#4ade80", bike: "#60a5fa", lift: "#f5c542", swim: "#22d3ee", walk: "#9ca3af", other: "#9ca3af" };
+T.boot((D) => {
+  const g = T.goal(D), v = D.vitals, f = T.form(D);
+  document.getElementById("ns").textContent = g.days != null ? g.days : "–";
+  document.getElementById("nsname").textContent = g.name + (g.date ? " · " + T.dateLabel(g.date, { day: "numeric", month: "short", year: "numeric" }) : "");
+  document.getElementById("cd").textContent = g.days != null ? g.days + " days" : "set a goal race";
+  const tick = () => document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-GB"); tick(); setInterval(tick, 1000);
+  document.getElementById("status").textContent = `core idle · garmin online · ${D.acts.length} nodes`;
+  const wkKm = T.weekly(D.runs, 1, (a) => T.sum(a.map((r) => r.distance_m)) / 1000)[0].value;
+  const cls = (lvl) => lvl === "green" ? "ok" : lvl === "amber" ? "warn" : "bad";
+  const fl = Object.fromEntries(T.flags(D).map((x) => [x.key, x]));
+  const row = (k, val, lvl) => `<div class="vr"><span>${k}</span><span class="${cls(lvl || "green")}">${val}</span></div>`;
+  document.getElementById("vitals").innerHTML =
+    row("Body Battery", v.bb ?? "–", fl.bb && fl.bb.level) + row("HRV", v.hrv != null ? `${Math.round(v.hrv)} ms (${v.hrvLow}–${v.hrvHigh})` : "–", fl.hrv && fl.hrv.level) +
+    row("Sleep", `${T.dur(v.sleepS)}${v.sleepScore != null ? " · " + v.sleepScore : ""}`, fl.sleep && fl.sleep.level) +
+    row("Form", f ? (f.form >= 0 ? "+" : "") + f.form.toFixed(0) : "–", fl.form && fl.form.level) + row("Km this week", wkKm.toFixed(1), "green");
+  const vd = T.verdict(D), dirs = [];
+  dirs.push(vd.call === "Go hard" ? "Green light: run today's key session as planned." : vd.call === "Easy day" ? "Easy day: keep everything in zone 1–2." : "Train, but cap the intensity today.");
+  dirs.push(v.sleepScore != null && v.sleepScore < 75 ? "Bank sleep tonight: in bed 30 minutes earlier." : "Protect tonight's sleep routine.");
+  dirs.push(g.days != null && g.days <= 14 ? `Race in ${g.days} days: no new training stress, sharpen only.` : "Log food and hit your protein target.");
+  document.getElementById("dirs").innerHTML = dirs.map((x) => `<li>${x}</li>`).join("");
+  const key = encodeURIComponent(T.key);
+  const deck = [["Recovery check", "recovery"], ["Plan today", "coach"], ["Send to watch", "coach"], ["Race week", "racer"], ["Weekly recap", "commander"], ["Ask my coach", "coach"]];
+  document.getElementById("deck").innerHTML = deck.map((d) => `<a class="btn" href="/training/${d[1]}?key=${key}">▸ ${d[0]}</a>`).join("");
+  document.getElementById("newchat").href = "https://claude.ai/new";
+  const counts = {}; D.acts.forEach((a) => counts[a.sport] = (counts[a.sport] || 0) + 1);
+  document.getElementById("legend").innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([s, n]) => `<div class="vr"><span><span style="color:${COL[s]}">●</span> ${s}</span><span>${n}</span></div>`).join("");
+  document.getElementById("q").oninput = (e) => {
+    const q = e.target.value.toLowerCase();
+    document.getElementById("hits").innerHTML = q.length < 2 ? "" : D.acts.filter((a) => (a.name || "").toLowerCase().includes(q)).slice(0, 6).map((a) => `<div style="color:var(--mut)">${a.date} · ${T.esc(a.name)}</div>`).join("");
+  };
+
+  // ---- 3D graph ----
+  const acts = D.acts.slice().reverse(), weeks = [...new Set(acts.map((a) => T.iso(T.monday(T.d(a.date)))))];
+  const W = weeks.length, wpos = {};
+  weeks.forEach((w, i) => { // spiral over a sphere, first week at the top
+    const t = W > 1 ? i / (W - 1) : 0, phi = Math.acos(1 - 2 * (0.02 + 0.96 * t)), th = i * 2.399;
+    wpos[w] = [Math.sin(phi) * Math.cos(th), Math.cos(phi), Math.sin(phi) * Math.sin(th)];
+  });
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const maxDur = Math.max(...acts.map((a) => a.duration_s || 0), 1);
+  const nodes = acts.map((a) => { const w = wpos[T.iso(T.monday(T.d(a.date)))], s = 0.06;
+    return { a, p: [w[0] * 1.08 + (rnd() - .5) * s, w[1] * 1.08 + (rnd() - .5) * s, w[2] * 1.08 + (rnd() - .5) * s], w, r: 1 + 3.2 * Math.sqrt((a.duration_s || 0) / maxDur) }; });
+  const longest = D.runs.slice().sort((a, b) => b.distance_m - a.distance_m)[0];
+  const cv = document.getElementById("c"), ctx = cv.getContext("2d"), co = document.getElementById("callout");
+  let ang = 0;
+  function frame() {
+    const dpr = devicePixelRatio || 1; cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const Wd = innerWidth, Hd = innerHeight, R = Math.min(Wd, Hd) * 0.3, cx = Wd / 2, cy = Hd / 2;
+    ctx.clearRect(0, 0, Wd, Hd);
+    // stars + perspective floor
+    ctx.fillStyle = "rgba(255,255,255,.5)"; for (let i = 0; i < 120; i++) { const x = (i * 97 % Wd), y = (i * 57 % (Hd * .6)); ctx.fillRect(x, y, 1, 1); }
+    ctx.strokeStyle = "rgba(245,197,66,.07)";
+    for (let i = -12; i <= 12; i++) { ctx.beginPath(); ctx.moveTo(cx + i * 20, Hd * 0.7); ctx.lineTo(cx + i * 160, Hd); ctx.stroke(); }
+    for (let j = 0; j < 8; j++) { const y = Hd * 0.7 + (Hd * 0.3) * Math.pow(j / 7, 1.8); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(Wd, y); ctx.stroke(); }
+    const ca = Math.cos(ang), sa = Math.sin(ang), tilt = 0.35, ct = Math.cos(tilt), st = Math.sin(tilt);
+    const proj = (p) => { let x = p[0] * ca - p[2] * sa, z = p[0] * sa + p[2] * ca, y = p[1] * ct - z * st; z = p[1] * st + z * ct;
+      const k = 2.6 / (2.6 + z); return [cx + x * R * k, cy - y * R * k, z, k]; };
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.9); glow.addColorStop(0, "rgba(255,220,140,.35)"); glow.addColorStop(1, "rgba(255,220,140,0)");
+    ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(cx, cy, R * 0.9, 0, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(245,197,66,.28)"; ctx.lineWidth = 1; ctx.beginPath();
+    weeks.forEach((w, i) => { const q = proj(wpos[w]); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }); ctx.stroke();
+    const P = nodes.map((n) => ({ n, q: proj(n.p), wq: proj(n.w) })).sort((a, b) => b.q[2] - a.q[2]);
+    ctx.lineWidth = .5;
+    P.forEach(({ n, q, wq }) => { ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(wq[0], wq[1]); ctx.stroke(); });
+    P.forEach(({ n, q }) => { ctx.globalAlpha = 0.35 + 0.65 * (1 - (q[2] + 1.2) / 2.4); ctx.fillStyle = COL[n.a.sport] || "#9ca3af";
+      ctx.beginPath(); ctx.arc(q[0], q[1], n.r * q[3], 0, 7); ctx.fill(); });
+    ctx.globalAlpha = 1;
+    const L = longest && P.find((x) => x.n.a.id === longest.id);
+    if (L) { ctx.strokeStyle = "#f5c542"; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(L.q[0], L.q[1], 9, 0, 7); ctx.stroke();
+      co.style.left = L.q[0] + 14 + "px"; co.style.top = L.q[1] - 10 + "px";
+      co.innerHTML = `<b style="color:var(--gold)">LONGEST RUN</b><br>${T.esc(longest.name)}<br>${T.dateLabel(longest.date, { day: "numeric", month: "short", year: "numeric" })} · ${T.fmtKm(longest.distance_m)} km · ${T.hm(longest.duration_s)}`; }
+    ang += 0.0025; requestAnimationFrame(frame);
+  }
+  frame();
+});
+</script></body></html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Racer</title>
+<link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1a33;color:#fff;font:14px system-ui,sans-serif;padding:24px}
+.A{font-family:Anton,Impact,sans-serif;letter-spacing:.02em;text-transform:uppercase}
+.hero{display:flex;gap:28px;align-items:flex-end;flex-wrap:wrap;border-bottom:4px solid #ff7a1a;padding-bottom:16px}
+.cd{font-size:170px;line-height:.85;color:#ffd23f}.cdl{color:#ff7a1a;font-size:26px}
+.name{font-size:64px;line-height:.95}.date{color:#9fb3d1;font-size:20px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}@media(max-width:800px){.stats{grid-template-columns:repeat(2,1fr)}.cd{font-size:110px}.name{font-size:40px}}
+.box{background:#11264a;border-left:6px solid #ff7a1a;padding:12px 14px}.box .v{font-size:40px;color:#ffd23f}.box .k{color:#9fb3d1;font-size:12px;text-transform:uppercase;letter-spacing:.12em}
+.cols{display:grid;grid-template-columns:2fr 1fr;gap:16px}@media(max-width:900px){.cols{grid-template-columns:1fr}}
+.panel{background:#11264a;padding:14px}h3{margin:0 0 10px;font-size:22px;color:#ff7a1a}
+.rr{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #1d3866}.rr b{font-size:22px}
+.g{color:#4ade80}.y{color:#ffd23f}.r{color:#ff5a5f}
+.muted{color:#9fb3d1;font-size:12px}
+</style></head><body>
+<div class="hero"><div><div class="A cd" id="cd"></div><div class="A cdl">days to go</div></div><div><div class="A name" id="name"></div><div class="date" id="date"></div></div></div>
+<div class="stats" id="stats"></div>
+<div class="cols">
+<div class="panel"><h3 class="A">Block km by week</h3><div id="weeks"></div><div class="muted" id="lbl"></div></div>
+<div class="panel"><h3 class="A">Race readiness · today</h3><div id="ready"></div></div>
+</div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const g = T.goal(D), v = D.vitals, f = T.form(D);
+  document.getElementById("cd").textContent = g.days != null ? Math.max(g.days, 0) : "?";
+  document.getElementById("name").textContent = g.name;
+  document.getElementById("date").textContent = g.date ? T.dateLabel(g.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "Set TRAINING_GOAL_DATE";
+  const start = T.qs.get("block") || D.cfg.block_start || T.iso(new Date(T.today() - 84 * 86400000));
+  const runs = D.runs.filter((r) => r.date >= start);
+  const longest = runs.slice().sort((a, b) => b.distance_m - a.distance_m)[0];
+  const stats = [["Block km", (T.sum(runs.map((r) => r.distance_m)) / 1000).toFixed(0)], ["Runs", runs.length],
+    ["Longest run", longest ? T.fmtKm(longest.distance_m) + " km" : "–"], ["Form", f ? (f.form >= 0 ? "+" : "") + f.form.toFixed(0) : "–"]];
+  document.getElementById("stats").innerHTML = stats.map((s) => `<div class="box"><div class="k">${s[0]}</div><div class="v A">${s[1]}</div></div>`).join("");
+  // weeks of the block
+  const labels = Object.assign({}, D.cfg.block_labels || {});
+  (T.qs.get("labels") || "").split(";").forEach((p) => { const [w, l] = p.split("="); if (w && l) labels[w] = l; });
+  const first = T.monday(T.d(start)), now = T.monday(T.today()), wks = [];
+  for (let w = new Date(first); w <= now; w = new Date(w.getTime() + 7 * 86400000)) {
+    const key = T.iso(w), end = T.iso(new Date(w.getTime() + 6 * 86400000));
+    wks.push({ key, km: T.sum(D.runs.filter((r) => r.date >= key && r.date <= end).map((r) => r.distance_m)) / 1000, label: labels[key] });
+  }
+  const raceWeek = g.date ? T.iso(T.monday(T.d(g.date))) : null;
+  document.getElementById("weeks").innerHTML = T.bars(wks.map((w) => w.km), {
+    labels: wks.map((w, i) => w.label ? w.label : "W" + (i + 1) + (w.key === raceWeek ? " RACE" : "")),
+    colors: wks.map((w) => w.label ? "#9fb3d1" : w.key === raceWeek ? "#ffd23f" : "#ff7a1a"), text: "#cfe0ff", h: 200, w: 640 });
+  document.getElementById("lbl").textContent = `Block started ${T.dateLabel(start, { day: "numeric", month: "short", year: "numeric" })}. Label weeks with &labels=YYYY-MM-DD=TAPER in the URL or TRAINING_BLOCK_LABELS.`;
+  const fl = Object.fromEntries(T.flags(D).map((x) => [x.key, x])), c = (x) => x ? { green: "g", amber: "y", red: "r" }[x.level] : "y";
+  const fa = v.fitAge != null && v.age ? (v.fitAge <= v.age ? "g" : "y") : "y";
+  const rows = [["Fitness age", v.fitAge != null ? Math.round(v.fitAge) : "–", fa], ["Form", f ? f.form.toFixed(0) : "–", c(fl.form)],
+    ["HRV vs baseline", v.hrv != null ? `${Math.round(v.hrv)} (${v.hrvLow}–${v.hrvHigh})` : "–", c(fl.hrv)], ["Sleep score", v.sleepScore ?? "–", c(fl.sleep)], ["Resting HR", v.rhr != null ? v.rhr + " bpm" : "–", c(fl.rhr)]];
+  document.getElementById("ready").innerHTML = rows.map((r) => `<div class="rr"><span>${r[0]}</span><b class="A ${r[2]}">${r[1]}</b></div>`).join("");
+});
+</script></body></html>

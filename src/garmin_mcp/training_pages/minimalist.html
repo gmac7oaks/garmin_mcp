@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Minimalist</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#faf8f4;color:#1c1b19;font:15px system-ui,sans-serif;display:flex;justify-content:center;padding:48px 22px}
+.w{width:100%;max-width:400px}
+.date{color:#9a958c;font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+.say{font-family:"Cormorant Garamond",Georgia,serif;font-size:52px;line-height:1.05;margin:18px 0 48px}
+.row{display:flex;justify-content:space-between;align-items:flex-end;padding:18px 0;border-top:1px solid #ebe7df}
+.lab{font-size:14px}.note{color:#a8a39a;font-size:12px;margin-top:3px}
+.num{font-family:"Cormorant Garamond",Georgia,serif;font-size:58px;line-height:.9;font-weight:600}
+.race{margin-top:48px;color:#9a958c;font-size:13px;text-align:center}
+</style></head><body><div class="w">
+<div class="date" id="date"></div><div class="say" id="say"></div>
+<div class="row"><div><div class="lab">Body Battery</div><div class="note" id="bbn"></div></div><div class="num" id="bb"></div></div>
+<div class="row"><div><div class="lab">Sleep</div><div class="note" id="sln"></div></div><div class="num" id="sl"></div></div>
+<div class="row"><div><div class="lab">HRV</div><div class="note" id="hvn"></div></div><div class="num" id="hv"></div></div>
+<div class="race" id="race"></div></div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const v = D.vitals, g = T.goal(D);
+  document.getElementById("date").textContent = T.today().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  let bad = 0;
+  if (v.hrv != null && v.hrvLow != null && v.hrv < v.hrvLow) bad++;
+  if (v.sleepScore != null && v.sleepScore < 60) bad++;
+  if (v.bb != null && v.bb < 40) bad++;
+  document.getElementById("say").textContent = bad ? "Go easy today." : "Green light.";
+  document.getElementById("bb").textContent = v.bb ?? "–";
+  document.getElementById("bbn").textContent = v.bbHigh != null ? `peaked at ${v.bbHigh} this morning` : "";
+  document.getElementById("sl").textContent = v.sleepScore ?? "–";
+  document.getElementById("sln").textContent = v.sleepS ? `score · ${T.dur(v.sleepS)} asleep` : "score";
+  document.getElementById("hv").textContent = v.hrv != null ? Math.round(v.hrv) : "–";
+  document.getElementById("hvn").textContent = v.hrvLow != null ? `ms · baseline ${v.hrvLow}–${v.hrvHigh}` : "ms";
+  document.getElementById("race").textContent = g.days != null ? `${g.days} days to ${g.name}` : "";
+});
+</script></body></html>

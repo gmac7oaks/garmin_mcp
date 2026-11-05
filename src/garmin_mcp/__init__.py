@@ -477,6 +477,15 @@ def main():
             http_api.register_routes(fastmcp, garmin_client, api_token)
             print("HTTP API enabled: GET /api/nutrition, GET /api/strength", file=sys.stderr)
 
+        # Browser training dashboards at /training/, behind their own key
+        # (it appears in page URLs, so it is kept separate from the API token).
+        training_token = os.getenv("TRAINING_TOKEN", "").strip()
+        if training_token:
+            from garmin_mcp.training_routes import register_training_routes
+
+            register_training_routes(fastmcp, garmin_client, training_token)
+            print("Training dashboards enabled at /training/", file=sys.stderr)
+
         print(
             f"Serving MCP over {transport} on {http_host}:{http_port}",
             file=sys.stderr,
