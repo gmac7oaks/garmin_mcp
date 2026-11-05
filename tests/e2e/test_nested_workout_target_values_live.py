@@ -15,7 +15,7 @@ from fitparse import FitFile
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from garmin_mcp import email, init_api, password
+from garmin_mcp import init_api, load_credentials
 
 
 async def _cleanup_scheduled_workout(session, workout_id):
@@ -65,7 +65,7 @@ async def _cleanup_scheduled_workout(session, workout_id):
     try:
         result = await session.call_tool(
             "delete_workout",
-            arguments={"workout_id": workout_id},
+            arguments={"workout_id": workout_id, "confirm": True},
         )
         data = json.loads(result.content[0].text)
         if data.get("status") != "success":
@@ -152,7 +152,7 @@ async def test_nested_pace_bounds_survive_inline_schedule_and_fit_export():
                 # The MCP download tool intentionally returns metadata rather
                 # than FIT bytes, so use a direct client only for FIT parsing.
                 # All MCP and direct-client calls remain sequential.
-                client = init_api(email, password)
+                client = init_api(*load_credentials())
                 assert client is not None
                 fit_bytes = client.download_workout(workout_id)
                 fit_steps = list(

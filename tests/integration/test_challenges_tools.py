@@ -4,6 +4,7 @@ Integration tests for challenges module MCP tools
 Tests all 9 challenges and badges tools using FastMCP integration with mocked Garmin API responses.
 """
 import json
+import time
 
 import pytest
 from unittest.mock import Mock
@@ -24,6 +25,26 @@ def app_with_challenges(mock_garmin_client):
     app = FastMCP("Test Challenges")
     app = challenges.register_tools(app)
     return app
+
+
+@pytest.mark.asyncio
+async def test_completed_badge_challenge_description_matches_library_endpoint(
+    app_with_challenges, mock_garmin_client
+):
+    """The LLM contract must distinguish completed history from active challenges."""
+    from garminconnect import Garmin
+
+    client = Garmin()
+    client.connectapi = Mock(return_value=[])
+    mock_garmin_client.get_badge_challenges.side_effect = client.get_badge_challenges
+    await app_with_challenges.call_tool("get_badge_challenges", {})
+    client.connectapi.assert_called_once_with(
+        "/badgechallenge-service/badgeChallenge/completed",
+        params={"start": "1", "limit": "20"},
+    )
+    tool = next(tool for tool in await app_with_challenges.list_tools() if tool.name == "get_badge_challenges")
+    assert "completed and in-progress" not in tool.description
+    assert "get_non_completed_badge_challenges" in tool.description
 
 
 @pytest.mark.asyncio
@@ -79,6 +100,50 @@ async def test_get_goals_future(app_with_challenges, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_goals_returns_connect_ui_cycling_goal(
+    app_with_challenges, mock_garmin_client
+):
+    """Connect UI goals need Sec-Fetch-Site: same-origin and a 1-based start."""
+    connect_ui_goal = {
+        "id": 1,
+        "name": "GCC 2026",
+        "type": "distance_accumulation",
+        "distanceInMeters": 160934.0,
+        "startDate": "2026-09-01",
+        "endDate": "2026-09-30",
+        "activityType": "cycling",
+        "period": "one_month",
+        "progress": {"percent": 17, "distanceInMeters": 28089.0},
+        "remaining": {"percent": 83, "days": 13, "distanceInMeters": 132845.0},
+        "active": True,
+        "completed": False,
+    }
+    mock_garmin_client.garmin_connect_goals_url = "/goal-service/goal/goals"
+    mock_garmin_client.get_goals.return_value = []
+
+    def connectapi(url, params=None, headers=None):
+        params = params or {}
+        if (headers or {}).get("Sec-Fetch-Site") != "same-origin":
+            return []
+        if params.get("start") == "0" or params.get("status") != "active":
+            return []
+        return [connect_ui_goal]
+
+    mock_garmin_client.connectapi.side_effect = connectapi
+
+    result = await app_with_challenges.call_tool(
+        "get_goals",
+        {"goal_type": "active"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data[0]["name"] == "GCC 2026"
+    assert data[0]["activity_type"] == "cycling"
+    assert data[0]["progress_percent"] == 17
+    mock_garmin_client.get_goals.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_personal_record_tool(app_with_challenges, mock_garmin_client):
     """Test get_personal_record tool returns personal records"""
     # Setup mock
@@ -91,8 +156,50 @@ async def test_get_personal_record_tool(app_with_challenges, mock_garmin_client)
     )
 
     # Verify
-    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data == [
+        {
+            "record_type": "Fastest 5K",
+            "type_id": 3,
+            "value": "20:00",
+            "raw_value": 1200.0,
+            # The local date, not the GMT one (2024-01-15)
+            "date": "2024-01-14",
+            "activity_id": 12345678901,
+        },
+        {
+            "record_type": "Most Steps Day",
+            "type_id": 12,
+            "value": "25,000",
+            "raw_value": 25000.0,
+            "date": "2024-01-10",
+        },
+    ]
     mock_garmin_client.get_personal_record.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_personal_record_date_falls_back_to_gmt_in_utc(
+    app_with_challenges, mock_garmin_client, monkeypatch
+):
+    """Without the local formatted timestamp, the date comes from the GMT
+    epoch read as UTC -- not shifted by the server's own timezone."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is unavailable on this platform")
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    try:
+        record = {**MOCK_PERSONAL_RECORD[0]}
+        del record["prStartTimeLocalFormatted"]
+        mock_garmin_client.get_personal_record.return_value = [record]
+
+        result = await app_with_challenges.call_tool("get_personal_record", {})
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+    data = json.loads(result[0][0].text)
+    assert data[0]["date"] == "2024-01-15"
 
 
 @pytest.mark.asyncio
