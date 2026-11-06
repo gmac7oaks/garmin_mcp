@@ -220,7 +220,7 @@
       let path = "", pen = false;
       se.vals.forEach((v, i) => { if (v == null) { pen = false; return; } path += (pen ? "L" : "M") + X(i).toFixed(1) + "," + Y(v).toFixed(1); pen = true; });
       if (se.fill) s += `<path d="${path}L${X(n - 1)},${Y(Math.max(lo, 0))}L${X(0)},${Y(Math.max(lo, 0))}Z" fill="${se.fill}"/>`;
-      s += `<path d="${path}" fill="none" stroke="${se.color}" stroke-width="${se.width || 1.8}"/>`;
+      if (se.width !== 0) s += `<path d="${path}" fill="none" stroke="${se.color}" stroke-width="${se.width || 1.8}"/>`;
       if (se.dots) se.vals.forEach((v, i) => { if (v != null) s += `<circle cx="${X(i)}" cy="${Y(v)}" r="2.4" fill="${se.color}"/>`; });
     });
     (o.labels || []).forEach((l, i) => { if (l) s += `<text x="${X(i)}" y="${o.h - 3}" font-size="9" text-anchor="middle" fill="${o.text}">${l}</text>`; });

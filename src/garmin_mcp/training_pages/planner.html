@@ -10,13 +10,13 @@ h1{margin:0;font-size:24px}.sub{color:#64748b;margin:2px 0 12px}
 .card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:14px}h3{margin:0 0 8px;font-size:15px}
 .muted{color:#64748b;font-size:12px}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 4px;border-bottom:1px solid #f1f5f9;text-align:right}th{color:#64748b;font-weight:500}td:first-child,td:nth-child(2),th:first-child,th:nth-child(2){text-align:left}
-tr.cut td{color:#64748b}tr.taper td{color:#7c3aed}tr.race td{font-weight:700;color:#d9480f}tr.now td{background:#fef9c3}
+tr.cut td{color:#64748b}tr.taper td{color:#7c3aed}tr.race td,tr.other td{font-weight:700;color:#d9480f}tr.now td{background:#fef9c3}
 </style></head><body>
 <h1>Block planner</h1><div class="sub">A starting point for the next build, worked out from your recent running. Adjust with your coach.</div>
 <div class="chips" id="chips"></div>
 <div class="tiles" id="tiles"></div>
 <div class="card"><h3>Weekly km: last 12 weeks and the plan</h3><div id="chart"></div><div class="muted"><span style="color:#0f172a">■</span> actual <span style="color:#94a3b8">■</span> planned <span style="color:#7c3aed">■</span> taper <span style="color:#d9480f">■</span> race week</div></div>
-<div class="card"><h3>Week by week</h3><table id="tbl"></table><div class="muted">Build about 8% a week, ease back every fourth week, then taper. Long run about 30% of the week, capped for the distance.</div></div>
+<div class="card"><h3>Week by week</h3><table id="tbl"></table><div class="muted">Build about 8% a week, ease back every fourth week and after any other race, then taper. Long run about 30% of the week, capped for the distance.</div></div>
 <script src="common.js"></script>
 <script>
 // Peak weekly km, peak long run (km) and taper weeks per distance.
@@ -25,18 +25,21 @@ let D, races, sel;
 function draw() {
   const r = races[sel], km = r.distance_m / 1000, [peak, longPeak, taperW] = TARGET(km);
   document.querySelectorAll(".chip").forEach((c, i) => c.classList.toggle("on", i === sel));
-  const wk = T.weekly(D.runs, 12, (a) => T.sum(a.map((x) => x.distance_m)) / 1000);
+  const wk = T.weekly(D.runs, 13, (a) => T.sum(a.map((x) => x.distance_m)) / 1000).slice(0, -1); // complete weeks only
   const longest = (n) => Math.max(0, ...D.runs.filter((x) => T.daysBetween(T.d(x.date), T.today()) < n).map((x) => x.distance_m / 1000));
-  const base = T.mean(wk.slice(-5, -1).map((w) => w.value)) || 20, long4 = longest(28);
+  const base = T.mean(wk.slice(-4).map((w) => w.value)) || 20, long4 = longest(28);
   const raceMon = T.monday(T.d(r.date)), thisMon = T.monday(T.today()), weeks = Math.round((raceMon - thisMon) / (7 * 86400000));
   // Plan forward from next week: build with cutbacks, then taper.
-  const plan = []; let vol = base;
-  for (let i = 1; i <= weeks; i++) {
+  const plan = []; let vol = base, recover = false;
+  for (let i = 0; i <= weeks; i++) {
     const mon = new Date(thisMon.getTime() + i * 7 * 86400000), toGo = weeks - i;
     let type = "build", v;
+    const sun = T.iso(new Date(mon.getTime() + 6 * 86400000)), other = races.find((o) => o !== r && o.date >= T.iso(mon) && o.date <= sun);
+    if (toGo !== 0 && other) { type = "other"; v = vol * 0.6; plan.push({ mon: T.iso(mon), type, v, lr: other.distance_m / 1000, other }); recover = true; continue; }
+    if (recover && toGo !== 0) { recover = false; type = "cut"; v = vol * 0.7; plan.push({ mon: T.iso(mon), type, v, lr: Math.min(longPeak, long4) * 0.7 }); continue; }
     if (toGo === 0) { type = "race"; v = vol * 0.5; }
     else if (toGo < taperW) { type = "taper"; v = vol * (toGo === 1 ? 0.6 : 0.8); }
-    else if (i % 4 === 0) { type = "cut"; v = vol * 0.75; }
+    else if (i > 0 && i % 4 === 0) { type = "cut"; v = vol * 0.75; }
     else { vol = Math.min(peak, vol * 1.08); v = vol; }
     const lr = type === "race" ? km : type === "taper" ? Math.min(longPeak * 0.6, v * 0.3) : Math.min(longPeak, Math.max(long4 * (type === "cut" ? 0.8 : 1), v * 0.3));
     plan.push({ mon: T.iso(mon), type, v, lr });
@@ -45,12 +48,12 @@ function draw() {
   document.getElementById("tiles").innerHTML = [
     ["Race", `${T.esc(r.title)}`], ["Weeks to go", weeks], ["Recent weekly km", Math.round(base)], ["Longest run, 4 weeks", long4.toFixed(1) + " km"]].map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
   const vals = wk.map((w) => w.value).concat(plan.map((p) => p.v));
-  const colors = wk.map(() => "#0f172a").concat(plan.map((p) => p.type === "race" ? "#d9480f" : p.type === "taper" ? "#7c3aed" : "#94a3b8"));
+  const colors = wk.map(() => "#0f172a").concat(plan.map((p) => p.type === "race" || p.type === "other" ? "#d9480f" : p.type === "taper" ? "#7c3aed" : "#94a3b8"));
   const labels = wk.map((w) => T.dateLabel(w.week)).concat(plan.map((p) => T.dateLabel(p.mon))).map((l, i, a) => i % Math.ceil(a.length / 14) ? "" : l);
   document.getElementById("chart").innerHTML = T.bars(vals, { labels, colors, w: 900, h: 180, text: "#475569" });
-  const name = { build: "Build", cut: "Ease back", taper: "Taper", race: "Race week" };
+  const name = { build: "Build", cut: "Ease back", taper: "Taper", race: "Race week", other: "Other race" };
   document.getElementById("tbl").innerHTML = "<tr><th>Week of</th><th>Focus</th><th>km</th><th>Long run</th></tr>" + plan.map((p) =>
-    `<tr class="${p.type}"><td>${T.dateLabel(p.mon, { day: "numeric", month: "short" })}</td><td>${name[p.type]}</td><td>${Math.round(p.v)}</td><td>${p.type === "race" ? T.esc(r.title) : Math.round(p.lr) + " km"}</td></tr>`).join("");
+    `<tr class="${p.type}"><td>${T.dateLabel(p.mon, { day: "numeric", month: "short" })}</td><td>${name[p.type]}</td><td>${Math.round(p.v)}</td><td>${p.type === "race" ? T.esc(r.title) : p.type === "other" ? T.esc(p.other.title) : Math.round(p.lr) + " km"}</td></tr>`).join("");
 }
 T.boot((d) => {
   D = d; const today = T.iso(T.today());
