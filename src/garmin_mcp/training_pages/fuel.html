@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fuel vs Training</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0f172a;color:#e2e8f0;font:14px system-ui,sans-serif;padding:20px}
+h1{margin:0 0 4px;font-size:24px}.sub{color:#94a3b8;margin-bottom:14px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}@media(max-width:900px){.tiles{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr!important}}
+.tile{background:#1e293b;border-radius:12px;padding:12px 14px}.tile .k{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.08em}.tile .v{font-size:28px;font-weight:700;margin-top:2px}.tile .n{color:#94a3b8;font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.card{background:#1e293b;border-radius:12px;padding:14px}h3{margin:0 0 8px;font-size:15px}
+.muted{color:#94a3b8;font-size:12px}.g{color:#4ade80}.y{color:#fbbf24}.r{color:#f87171}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 4px;border-bottom:1px solid #334155;text-align:right}th{color:#94a3b8;font-weight:500}td:first-child,th:first-child{text-align:left}
+</style></head><body>
+<h1>Fuel vs training</h1><div class="sub" id="sub"></div>
+<div class="tiles" id="tiles"></div>
+<div class="grid">
+<div class="card" style="grid-column:1/-1"><h3>Eaten vs burned · last 28 days</h3><div id="bal"></div><div class="muted"><span style="color:#fb923c">■</span> eaten (Garmin food log) <span style="color:#60a5fa">■</span> burned (watch) · days with under 800 kcal logged are left out</div></div>
+<div class="card"><h3>Protein per kg</h3><div id="prot"></div><div class="muted">Shaded: 1.6–2.2 g/kg, the range for building muscle.</div></div>
+<div class="card"><h3>Weight · 120 days</h3><div id="wt"></div><div class="muted" id="wtn"></div></div>
+<div class="card" style="grid-column:1/-1"><h3>Carbs on hard vs easy days</h3><div id="carb"></div></div>
+</div>
+<script src="common.js"></script>
+<script>
+T.boot((D) => {
+  const goalGain = +(T.qs.get("gain") || 0.4); // kg per week
+  const W = (D.weight || []), kg = (W.slice(-1)[0] || {}).kg || 84;
+  const food = Object.fromEntries((D.food || []).filter((f) => (f.calories || 0) >= 800).map((f) => [f.date, f]));
+  const burn = Object.fromEntries((D.energy || []).map((e) => [e.date, e]));
+  const loadBy = {}; D.acts.forEach((a) => loadBy[a.date] = (loadBy[a.date] || 0) + (a.load || 0));
+  const days = T.days(28), today = T.iso(T.today());
+  const full = days.filter((d) => food[d] && burn[d] && d !== today);
+  const bal = full.map((d) => food[d].calories - burn[d].total);
+  const last7 = full.slice(-7).map((d) => food[d].calories - burn[d].total), avg7 = T.mean(last7);
+  const need = goalGain * 7700 / 7;
+  const prot = full.map((d) => food[d].protein / kg), p7 = T.mean(prot.slice(-7));
+  const avg7w = (n) => T.mean(W.filter((w) => T.daysBetween(T.d(w.date), T.today()) < n && T.daysBetween(T.d(w.date), T.today()) >= n - 7).map((w) => w.kg));
+  const nowW = avg7w(7), prevW = avg7w(14), rate = nowW && prevW ? nowW - prevW : null;
+  document.getElementById("sub").textContent = `${full.length} complete days logged out of the last 28 · weight ${kg} kg · aiming for +${goalGain} kg a week`;
+  const tile = (k, v, n, c) => `<div class="tile"><div class="k">${k}</div><div class="v ${c || ""}">${v}</div><div class="n">${n}</div></div>`;
+  document.getElementById("tiles").innerHTML =
+    tile("Daily balance (7 days)", avg7 == null ? "–" : (avg7 >= 0 ? "+" : "") + Math.round(avg7) + " kcal", `a +${goalGain} kg/week bulk needs about +${Math.round(need)}`, avg7 == null ? "" : Math.abs(avg7 - need) < 200 ? "g" : avg7 < need ? "y" : "y") +
+    tile("Protein (7 days)", p7 ? p7.toFixed(1) + " g/kg" : "–", `${p7 ? Math.round(p7 * kg) : "–"} g a day`, p7 >= 1.6 ? "g" : "y") +
+    tile("Weight change", rate == null ? "–" : (rate >= 0 ? "+" : "") + rate.toFixed(2) + " kg", "7-day average vs the week before", rate == null ? "" : Math.abs(rate - goalGain) <= 0.2 ? "g" : "y") +
+    tile("Burned (7 days)", Math.round(T.mean(full.slice(-7).map((d) => burn[d].total)) || 0) + " kcal", "average per day, from your watch");
+  document.getElementById("bal").innerHTML = T.lines([
+    { vals: days.map((d) => food[d] && d !== today ? food[d].calories : null), color: "#fb923c", width: 2, dots: true },
+    { vals: days.map((d) => burn[d] && d !== today ? burn[d].total : null), color: "#60a5fa", width: 2, dots: true }],
+    { w: 900, h: 200, text: "#94a3b8", grid: "rgba(255,255,255,.06)", labels: days.map((d, i) => i % 4 ? "" : T.dateLabel(d)) });
+  document.getElementById("prot").innerHTML = T.lines([{ vals: days.map((d) => food[d] && d !== today ? food[d].protein / kg : null), color: "#f472b6", width: 2, dots: true }],
+    { w: 440, h: 170, band: [1.6, 2.2], bandColor: "rgba(74,222,128,.15)", text: "#94a3b8", grid: "rgba(255,255,255,.06)", fmt: (v) => v.toFixed(1) });
+  const wd = T.days(120), wBy = Object.fromEntries(W.map((w) => [w.date, w.kg]));
+  const sm = wd.map((d, i) => T.mean(wd.slice(Math.max(0, i - 6), i + 1).map((x) => wBy[x])));
+  document.getElementById("wt").innerHTML = T.lines([{ vals: wd.map((d) => wBy[d] ?? null), color: "#64748b", width: 1, dots: true }, { vals: sm, color: "#38bdf8", width: 2.5 }],
+    { w: 440, h: 170, text: "#94a3b8", grid: "rgba(255,255,255,.06)", fmt: (v) => v.toFixed(1) });
+  document.getElementById("wtn").textContent = "Dots: weigh-ins. Line: 7-day average.";
+  const hard = full.filter((d) => (loadBy[d] || 0) >= 100), easy = full.filter((d) => (loadBy[d] || 0) < 100);
+  const row = (label, ds) => `<tr><td>${label}</td><td>${ds.length}</td><td>${ds.length ? Math.round(T.mean(ds.map((d) => loadBy[d] || 0))) : "–"}</td><td>${ds.length ? (T.mean(ds.map((d) => food[d].carbs)) / kg).toFixed(1) : "–"}</td><td>${ds.length ? Math.round(T.mean(ds.map((d) => food[d].calories))) : "–"}</td></tr>`;
+  const hc = hard.length ? T.mean(hard.map((d) => food[d].carbs)) / kg : null, ec = easy.length ? T.mean(easy.map((d) => food[d].carbs)) / kg : null;
+  document.getElementById("carb").innerHTML = `<table><tr><th>Day type</th><th>Days</th><th>Avg load</th><th>Carbs g/kg</th><th>Calories</th></tr>${row("Hard (load 100+)", hard)}${row("Easy or rest", easy)}</table>
+    <p class="muted">${hc != null && ec != null ? (hc > ec + 0.5 ? "✅ You eat more carbs on hard days." : "⚠️ Carbs barely change with training. Aim for 5–7 g/kg on hard days and 3–5 g/kg on easy ones.") : "Not enough logged days yet."}</p>`;
+});
+</script></body></html>

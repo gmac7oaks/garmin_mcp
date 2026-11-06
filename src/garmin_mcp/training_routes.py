@@ -35,6 +35,10 @@ PAGES = {
     "recovery": "The Recovery Nerd",
     "archivist": "The Archivist",
     "minimalist": "The Minimalist",
+    "raceweek": "Race Week",
+    "fuel": "Fuel vs Training",
+    "form": "Running Form",
+    "planner": "Block Planner",
 }
 _NAME = re.compile(r"^[a-z]+$")
 

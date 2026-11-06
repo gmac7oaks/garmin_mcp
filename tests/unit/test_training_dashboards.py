@@ -61,6 +61,13 @@ class FakeGarmin:
             self._check("resting_hr")
             return {"allMetrics": {"metricsMap": {"WELLNESS_RESTING_HEART_RATE": [
                 {"calendarDate": "2026-11-05", "value": 51}]}}}
+        if "stats/daily" in path:
+            self._check("energy")
+            return {"values": [{"calendarDate": "2026-11-05", "values": {"totalCalories": 2900, "activeCalories": 900, "restingCalories": 2000}}]}
+        if "food/logs" in path:
+            self._check("food")
+            return {"dailyNutritionContent": {"calories": 2400, "protein": 170, "carbs": 260, "fat": 80, "fiber": 30},
+                    "dailyNutritionGoals": {"calories": 2600, "protein": 170}}
         if "stress" in path:
             self._check("stress")
             return [{"calendarDate": "2026-11-05", "values": {"overallStressLevel": 28}}]
@@ -82,6 +89,30 @@ class FakeGarmin:
 
     def get_hrv_data(self, day):
         return {}
+
+    def get_race_predictions(self, *args):
+        self._check("race_predictions")
+        if args:
+            return [{"calendarDate": "2026-11-04", "time5K": 1150, "time10K": 2360},
+                    {"calendarDate": "2026-11-05", "time5K": 1143, "time10K": 2349}]
+        return {"calendarDate": "2026-11-05", "time5K": 1143, "time10K": 2349,
+                "timeHalfMarathon": 5258, "timeMarathon": 11400}
+
+    def get_scheduled_workouts(self, year, month):
+        self._check("calendar")
+        if (year, month) != (2026, 11):
+            return {"calendarItems": []}
+        return {"calendarItems": [
+            {"id": 1, "itemType": "event", "date": "2026-11-15", "title": "Marden 10km", "isRace": True,
+             "primaryEvent": True, "completionTarget": {"value": 10, "unit": "kilometer"}},
+            {"id": 2, "itemType": "workout", "date": "2026-11-07", "title": "Easy 40", "sportTypeKey": "running"},
+            {"id": 3, "itemType": "workout", "date": "2026-11-01", "title": "Past run"},
+            {"id": 4, "itemType": "weight", "date": "2026-11-06"},
+        ]}
+
+    def get_body_composition(self, a, b):
+        self._check("weight")
+        return {"dateWeightList": [{"calendarDate": "2026-11-05", "weight": 84130.0, "bodyFat": 25.7}]}
 
     def get_fitnessage_data(self, day):
         self._check("fitness_age")
@@ -231,3 +262,30 @@ def test_every_page_is_served():
 def test_common_js_is_public():
     r = client(StubData()).get("/training/common.js")
     assert r.status_code == 200 and "window.T" in r.text or "T.prepare" in r.text
+
+
+def test_new_sections():
+    client = FakeGarmin()
+    data = make(client)
+    doc = data.build()
+    assert doc["errors"] == {}
+    rp = doc["race_predictions"]
+    assert rp["10k"] == 2349 and len(rp["history"]) == 2
+    cal = doc["calendar"]
+    assert cal["events"] == [{"title": "Marden 10km", "date": "2026-11-15", "race": True, "primary": True,
+                              "distance_m": 10000.0, "location": None}]
+    assert [w["title"] for w in cal["scheduled"]] == ["Easy 40"]
+    assert doc["energy"][0]["total"] == 2900
+    assert len(doc["food"]) == td.FOOD_DAYS and doc["food"][-1]["protein"] == 170
+    assert doc["weight"] == [{"date": "2026-11-05", "kg": 84.13, "fat_pct": 25.7}]
+    # Settled food days are cached: a rebuild only re-reads the last three days.
+    before = client.calls.count("food")
+    data.build()
+    assert client.calls.count("food") - before == 3
+
+
+def test_trim_activity_keeps_running_dynamics():
+    a = td.trim_activity({"activityId": 9, "averageRunningCadenceInStepsPerMinute": 166.4,
+                          "avgGroundContactTime": 251.0, "avgVerticalRatio": 8.1, "avgStrideLength": 118.0,
+                          "activityType": {"typeKey": "running"}})
+    assert a["cadence"] == 166.4 and a["gct_ms"] == 251.0 and a["vert_ratio"] == 8.1 and a["stride_cm"] == 118.0

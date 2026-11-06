@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 ACTIVITY_PAGE = 100
 WELLNESS_DAYS = 365
 BODY_BATTERY_DAYS = 90
+ENERGY_DAYS = 56  # calories burned per day
+FOOD_DAYS = 28  # food logs, one request per day (older days are cached)
+WEIGHT_DAYS = 120
+CALENDAR_AHEAD_DAYS = 210
+PREDICTION_DAYS = 120  # races on the Garmin calendar
 REFRESH_HOURS = (7, 13, 20)  # UK local time; override with TRAINING_REFRESH_HOURS="7,13,20"
 
 
@@ -65,6 +70,14 @@ _ACTIVITY_FIELDS = {
     "anaerobicTrainingEffect": "te_anaerobic",
     "trainingEffectLabel": "te_label",
     "vO2MaxValue": "vo2max",
+    # Running dynamics (runs only; need a watch or HRM that records them).
+    "averageRunningCadenceInStepsPerMinute": "cadence",
+    "avgGroundContactTime": "gct_ms",
+    "avgVerticalRatio": "vert_ratio",
+    "avgVerticalOscillation": "vert_osc_cm",
+    "avgStrideLength": "stride_cm",
+    "avgPower": "power_w",
+    "elevationLoss": "descent_m",
 }
 
 
@@ -138,6 +151,7 @@ class TrainingData:
         self._built_at = 0.0
         self._build_lock = threading.Lock()
         self._scheduler: Optional[threading.Thread] = None
+        self._food_cache: Dict[str, Dict[str, Any]] = {}
 
     # ----- fetching -------------------------------------------------------
 
@@ -271,6 +285,121 @@ class TrainingData:
             "achievable": data.get("achievableFitnessAge"),
         }
 
+    @staticmethod
+    def _prediction(data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "date": str(data.get("calendarDate") or "")[:10] or None,
+            "5k": data.get("time5K"),
+            "10k": data.get("time10K"),
+            "half": data.get("timeHalfMarathon"),
+            "marathon": data.get("timeMarathon"),
+        }
+
+    def race_predictions(self, day: datetime.date) -> Dict[str, Any]:
+        out = self._prediction(self._client.get_race_predictions() or {})
+        try:  # daily history for trend lines; optional
+            first = day - datetime.timedelta(days=PREDICTION_DAYS - 1)
+            rows = self._client.get_race_predictions(str(first), str(day), "daily") or []
+            if isinstance(rows, dict):
+                rows = rows.get("racePredictions") or rows.get("values") or [rows]
+            out["history"] = [self._prediction(r) for r in rows if isinstance(r, dict) and r.get("time10K")]
+        except Exception as exc:
+            logger.info("race prediction history unavailable: %s", exc)
+            out["history"] = []
+        return out
+
+    def calendar(self, day: datetime.date) -> Dict[str, Any]:
+        """Races on the Garmin calendar and the next three weeks of scheduled workouts."""
+        last = day + datetime.timedelta(days=CALENDAR_AHEAD_DAYS)
+        year, month = day.year, day.month
+        events, scheduled, seen = [], [], set()
+        while (year, month) <= (last.year, last.month):
+            data = self._client.get_scheduled_workouts(year, month) or {}
+            for item in data.get("calendarItems") or []:
+                if not isinstance(item, dict):
+                    continue
+                date = str(item.get("date") or "")
+                key = (item.get("id"), date, item.get("itemType"))
+                if not date or date < day.isoformat() or key in seen:
+                    continue
+                seen.add(key)
+                if item.get("itemType") == "event":
+                    target = item.get("completionTarget") or {}
+                    unit = {"meter": 1.0, "kilometer": 1000.0, "mile": 1609.344, "yard": 0.9144}.get(target.get("unit"))
+                    events.append({
+                        "title": item.get("title"),
+                        "date": date,
+                        "race": bool(item.get("isRace")),
+                        "primary": bool(item.get("primaryEvent")),
+                        "distance_m": target.get("value") * unit if unit and isinstance(target.get("value"), (int, float)) else None,
+                        "location": item.get("location"),
+                    })
+                elif item.get("itemType") == "workout" and date <= (day + datetime.timedelta(days=21)).isoformat():
+                    scheduled.append({"date": date, "title": item.get("title"), "sport": (item.get("sportTypeKey") or "")})
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        events.sort(key=lambda e: e["date"])
+        scheduled.sort(key=lambda w: w["date"])
+        return {"events": events, "scheduled": scheduled}
+
+    def energy(self, first: datetime.date, last: datetime.date) -> List[Dict[str, Any]]:
+        out = []
+        for a, b in _chunks(first, last, 28):
+            data = self._api(f"/usersummary-service/stats/daily/{a}/{b}", {"statsType": "CALORIES"}) or {}
+            for row in data.get("values") or []:
+                v = row.get("values") or {}
+                if v.get("totalCalories") is not None:
+                    out.append({
+                        "date": row.get("calendarDate"),
+                        "total": v.get("totalCalories"),
+                        "active": v.get("activeCalories"),
+                        "resting": v.get("restingCalories"),
+                    })
+        return out
+
+    def food(self, first: datetime.date, last: datetime.date) -> List[Dict[str, Any]]:
+        """Daily food-log totals. Days more than two days old are cached."""
+        out = []
+        day = first
+        settled = last - datetime.timedelta(days=2)
+        while day <= last:
+            key = day.isoformat()
+            row = self._food_cache.get(key) if day < settled else None
+            if row is None:
+                data = self._api(f"/nutrition-service/food/logs/{key}") or {}
+                content = data.get("dailyNutritionContent") or {}
+                goals = data.get("dailyNutritionGoals") or {}
+                row = {
+                    "date": key,
+                    "calories": content.get("calories"),
+                    "protein": content.get("protein"),
+                    "carbs": content.get("carbs"),
+                    "fat": content.get("fat"),
+                    "fibre": content.get("fiber"),
+                    "goal_calories": goals.get("calories"),
+                    "goal_protein": goals.get("protein"),
+                    "goal_carbs": goals.get("carbs"),
+                    "goal_fat": goals.get("fat"),
+                }
+                if day < settled:
+                    self._food_cache[key] = row
+            out.append(row)
+            day += datetime.timedelta(days=1)
+        return out
+
+    def weight(self, first: datetime.date, last: datetime.date) -> List[Dict[str, Any]]:
+        data = self._client.get_body_composition(str(first), str(last)) or {}
+        out = []
+        for row in data.get("dateWeightList") or []:
+            grams = row.get("weight")
+            if grams:
+                out.append({
+                    "date": row.get("calendarDate"),
+                    "kg": round(grams / 1000, 2),
+                    "fat_pct": row.get("bodyFat"),
+                })
+        out.sort(key=lambda r: r["date"] or "")
+        return out
+
     # ----- building -------------------------------------------------------
 
     def build(self) -> Dict[str, Any]:
@@ -287,6 +416,11 @@ class TrainingData:
             ("today", lambda: self.today_snapshot(day)),
             ("hr_zones", self.zones),
             ("fitness_age", lambda: self.fitness_age(day)),
+            ("race_predictions", lambda: self.race_predictions(day)),
+            ("calendar", lambda: self.calendar(day)),
+            ("energy", lambda: self.energy(day - datetime.timedelta(days=ENERGY_DAYS - 1), day)),
+            ("food", lambda: self.food(day - datetime.timedelta(days=FOOD_DAYS - 1), day)),
+            ("weight", lambda: self.weight(day - datetime.timedelta(days=WEIGHT_DAYS - 1), day)),
         ]
         doc: Dict[str, Any] = {"errors": {}}
         for name, fetch in sections:
