@@ -52,7 +52,7 @@ T.boot((D) => {
     const target = sec(goalEl.value), gap = target - now, cls = gap >= 0 ? "ok" : gap > -30 ? "warn" : "bad";
     const hist = (rp.history || []).filter((h) => h[key]);
     document.getElementById("pred").innerHTML = `<div class="big">${mmss(now)}</div><span class="pill ${cls}">${gap >= 0 ? mmss(gap) + " inside" : mmss(-gap) + " outside"} your ${goalEl.value} goal</span>`
-      + (hist.length > 1 ? T.lines([{ vals: hist.map((h) => h[key]), color: "#d9480f", width: 2 }], { w: 520, h: 150, text: "#6b7280", fmt: mmss, band: [target - 1, target + 1], bandColor: "rgba(22,101,52,.5)", labels: hist.map((h, i) => i % Math.ceil(hist.length / 6) ? "" : T.dateLabel(h.date)) })
+      + (hist.length > 1 ? T.lines([{ vals: hist.map((h) => h[key]), color: "#d9480f", width: 2 }], { w: 520, h: 150, text: "#6b7280", fmt: mmss, band: [target - 3, target + 3], bandColor: "rgba(22,101,52,.5)", labels: hist.map((h, i) => i % Math.ceil(hist.length / 6) ? "" : T.dateLabel(h.date)) })
         + `<div class="muted">Predicted ${key.toUpperCase()} time over ${hist.length} days; the green line is your goal.</div>` : "");
   } else document.getElementById("pred").textContent = "No Garmin prediction available.";
   // Form projection: taper at half the recent daily load
@@ -70,7 +70,7 @@ T.boot((D) => {
   const sch = (cal.scheduled || []).filter((w) => !date || w.date <= date);
   document.getElementById("taper").innerHTML = sch.length ? `<table>${sch.map((w) => `<tr><td>${T.dateLabel(w.date, { weekday: "short", day: "numeric", month: "short" })}</td><td style="text-align:left">${T.esc(w.title)}</td></tr>`).join("")}</table>` : "Nothing scheduled in Garmin before the race.";
   // Fuel
-  const kg = ((D.weight || []).slice(-1)[0] || {}).kg || 84;
+  const kg = +(((D.weight || []).slice(-1)[0] || {}).kg || 84).toFixed(1);
   document.getElementById("fuel").innerHTML = `<ul>
     <li><b>Day before:</b> about ${Math.round(kg * 6)}–${Math.round(kg * 8)} g carbs (6–8 g/kg at ${kg} kg). Keep fibre and fat low.</li>
     <li><b>Breakfast 2½–3 h before:</b> about ${Math.round(kg * 1.5)} g carbs, familiar food only.</li>

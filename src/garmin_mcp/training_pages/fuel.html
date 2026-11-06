@@ -57,6 +57,6 @@ T.boot((D) => {
   const row = (label, ds) => `<tr><td>${label}</td><td>${ds.length}</td><td>${ds.length ? Math.round(T.mean(ds.map((d) => loadBy[d] || 0))) : "–"}</td><td>${ds.length ? (T.mean(ds.map((d) => food[d].carbs)) / kg).toFixed(1) : "–"}</td><td>${ds.length ? Math.round(T.mean(ds.map((d) => food[d].calories))) : "–"}</td></tr>`;
   const hc = hard.length ? T.mean(hard.map((d) => food[d].carbs)) / kg : null, ec = easy.length ? T.mean(easy.map((d) => food[d].carbs)) / kg : null;
   document.getElementById("carb").innerHTML = `<table><tr><th>Day type</th><th>Days</th><th>Avg load</th><th>Carbs g/kg</th><th>Calories</th></tr>${row("Hard (load 100+)", hard)}${row("Easy or rest", easy)}</table>
-    <p class="muted">${hc != null && ec != null ? (hc > ec + 0.5 ? "✅ You eat more carbs on hard days." : "⚠️ Carbs barely change with training. Aim for 5–7 g/kg on hard days and 3–5 g/kg on easy ones.") : "Not enough logged days yet."}</p>`;
+    <p class="muted">${hc == null || ec == null ? "Not enough logged days yet." : (hc > ec + 0.5 ? "✅ You eat more carbs on hard days" : "⚠️ Carbs barely change with training") + (hc < 5 ? `, but ${hc.toFixed(1)} g/kg is light for hard days: aim for 5–7 g/kg (about ${Math.round(kg * 5)}–${Math.round(kg * 7)} g) and 3–5 g/kg on easy ones.` : ".")}</p>`;
 });
 </script></body></html>
