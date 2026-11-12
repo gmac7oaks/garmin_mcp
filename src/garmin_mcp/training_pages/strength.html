@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strength Progression</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#111827;font:14px system-ui,sans-serif;padding:20px}
+h1{margin:0;font-size:24px}.sub{color:#6b7280;margin:2px 0 12px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.chip{border:1px solid #d1d5db;border-radius:99px;padding:6px 16px;cursor:pointer;background:#fff;font-weight:600}.chip.on{background:#111827;color:#fff;border-color:#111827}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}@media(max-width:900px){.tiles{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr!important}}
+.tile{border:1px solid #e5e7eb;border-radius:12px;padding:12px}.tile .k{font-size:12px;color:#6b7280}.tile .v{font-size:26px;font-weight:700}.tile .n{font-size:12px;color:#6b7280}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:12px}h3{margin:0;font-size:14px}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.big{font-size:20px;font-weight:700}.muted{color:#6b7280;font-size:12px}
+.up{color:#15803d}.down{color:#b91c1c}.flat{color:#6b7280}
+.tag{display:inline-block;font-size:11px;border-radius:99px;padding:2px 8px;margin-top:6px}.go{background:#dcfce7;color:#166534}.hold{background:#fef3c7;color:#92400e}
+</style></head><body>
+<h1>Strength progression</h1><div class="sub" id="sub"></div>
+<div class="chips" id="chips"></div>
+<div class="tiles" id="tiles"></div>
+<div class="grid" id="grid"></div>
+<div class="card"><h3>Volume per session (kg lifted)</h3><div id="vol"></div><div class="muted">Sets × reps × weight, as logged on the watch. Grey = easy or race-week sessions.</div></div>
+<script src="common.js"></script>
+<script>
+const GROUPS = [["push", "Push"], ["pull", "Pull"], ["legs", "Legs"]];
+const COLORS = { push: "#2563eb", pull: "#9333ea", legs: "#ea580c" };
+let S, sel;
+const kg = (v) => (v == null ? "–" : (Math.round(v * 2) / 2).toString().replace(/\.0$/, "") + " kg");
+function draw() {
+  document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.g === sel));
+  const color = COLORS[sel], sessions = S.filter((s) => s.group === sel);
+  if (!sessions.length) { document.getElementById("grid").innerHTML = '<div class="muted">No sessions with this name in the last 6 months.</div>'; document.getElementById("tiles").innerHTML = ""; document.getElementById("vol").innerHTML = ""; return; }
+  const latest = sessions[sessions.length - 1];
+  // Exercises done in 2+ sessions, in the order of the latest session, then by frequency.
+  const count = {}; sessions.forEach((s) => s.exercises.forEach((e) => (count[e.key] = (count[e.key] || 0) + 1)));
+  const order = latest.exercises.map((e) => e.key).concat(Object.keys(count).sort((a, b) => count[b] - count[a]));
+  // Current exercises only: done in 2+ sessions and in one of the last three proper sessions.
+  const recent = new Set(sessions.filter((s) => !s.light).slice(-3).flatMap((s) => s.exercises.map((e) => e.key)));
+  const keys = [...new Set(order)].filter((k) => count[k] >= 2 && recent.has(k));
+  const step = Math.ceil(sessions.length / 6), n = sessions.length;
+  const labels = sessions.map((s, i) => (i === n - 1 || (i % step === 0 && n - 1 - i >= step / 2) ? T.dateLabel(s.date) : ""));
+  let up = 0, tracked = 0;
+  document.getElementById("grid").innerHTML = keys.map((k) => {
+    const rows = sessions.map((s) => s.exercises.find((e) => e.key === k) || null);
+    const bw = rows.every((r) => !r || !r.top_kg);
+    const val = (r) => (r ? (bw ? r.max_reps : r.top_kg) : null);
+    const solid = rows.map((r, i) => (sessions[i].light ? null : val(r)));
+    const light = rows.map((r, i) => (sessions[i].light ? val(r) : null));
+    const done = rows.map((r, i) => [r, i]).filter(([r, i]) => r && !sessions[i].light);
+    if (!done.length) return "";
+    const [last, li] = done[done.length - 1], [first, fi] = done[0];
+    const label = last.label, unit = bw ? " reps" : "";
+    const fmt = (r) => (bw ? r.max_reps + " reps" : kg(r.top_kg));
+    // Change vs about 8 weeks ago (or the first session if newer).
+    const cutoff = T.iso(new Date(T.d(sessions[li].date) - 56 * 86400000));
+    const base = done.find(([r, i]) => sessions[i].date >= cutoff) || done[0];
+    const diff = val(last) - val(base[0]);
+    tracked++; if (diff > 0) up++;
+    // Rep target = the most reps managed at the top weight last time; ready to go up once every set reaches it.
+    const reps = last.reps_at_top || [], minR = Math.min(...reps);
+    const prev = done.length > 1 ? done[done.length - 2][0] : null, target = prev ? Math.max(...(prev.reps_at_top || [0])) : null;
+    let tag = "";
+    if (!bw && target && reps.length >= 2 && last.top_kg >= prev.top_kg) {
+      if (minR >= target) tag = `<span class="tag go">Every set hit ${target}+ reps · ready to add weight</span>`;
+      else if (target - minR >= 2) tag = `<span class="tag hold">Down to ${minR} reps (aim ${target}) · hold this weight</span>`;
+    }
+    const chart = T.lines([{ vals: solid, color, width: 2.2, dots: true }, { vals: light, color: "#9ca3af", width: 0, dots: true }],
+      { w: 360, h: 140, labels, text: "#6b7280", fmt: (v) => (Math.round(v * 2) / 2).toString() });
+    return `<div class="card"><div class="row"><h3>${T.esc(label)}</h3><span class="big">${fmt(last)}</span></div>
+      <div class="row muted"><span>${bw ? "best set" : "× " + reps.join(" / ")} · ${T.dateLabel(sessions[li].date)}</span>
+      <span class="${diff > 0 ? "up" : diff < 0 ? "down" : "flat"}">${diff > 0 ? "+" : ""}${bw ? diff : kg(diff).replace(" kg", "")}${bw ? unit : " kg"} since ${T.dateLabel(sessions[base[1]].date)}</span></div>
+      ${chart}${tag}</div>`;
+  }).join("");
+  const vols = sessions.map((s) => T.sum(s.exercises.map((e) => e.volume_kg)));
+  const half = Math.floor(vols.length / 2), early = T.mean(vols.slice(0, half)), late = T.mean(vols.slice(half));
+  const tile = (k, v, n) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n}</div></div>`;
+  document.getElementById("tiles").innerHTML =
+    tile("Sessions", sessions.length, "in the last 6 months") +
+    tile("Last session", T.dateLabel(latest.date, { weekday: "short", day: "numeric", month: "short" }), T.esc(latest.name)) +
+    tile("Lifts going up", `${up} / ${tracked}`, "heavier (or more reps) than ~8 weeks ago") +
+    tile("Volume per session", Math.round(late / 100) / 10 + " t", early ? `${late >= early ? "+" : ""}${Math.round(((late - early) / early) * 100)}% vs the first half of the period` : "");
+  document.getElementById("vol").innerHTML = T.bars(vols, { w: 900, h: 140, colors: sessions.map((s) => (s.light ? "#d1d5db" : color)), labels: sessions.map((s, i) => labels[i]), fmt: (x) => (x / 1000).toFixed(1), text: "#6b7280" });
+}
+T.boot((D) => {
+  S = (D.strength || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+  document.getElementById("sub").textContent = S.length
+    ? "Heaviest working weight per exercise in each session, from the sets your watch logged. Grey dots are easy or race-week sessions and don't count towards the trend."
+    : "No Push, Pull or Legs sessions found. Name your strength activities with Push, Pull or Legs to track them here.";
+  const want = (T.qs.get("group") || "").toLowerCase();
+  sel = GROUPS.some(([g]) => g === want) ? want : (S.length ? S[S.length - 1].group : "push");
+  document.getElementById("chips").innerHTML = GROUPS.map(([g, l]) => `<span class="chip" data-g="${g}">${l} · ${S.filter((s) => s.group === g).length}</span>`).join("");
+  document.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { sel = c.dataset.g; draw(); }));
+  draw();
+});
+</script></body></html>

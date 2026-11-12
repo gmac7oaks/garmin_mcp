@@ -289,3 +289,73 @@ def test_trim_activity_keeps_running_dynamics():
                           "avgGroundContactTime": 251.0, "avgVerticalRatio": 8.1, "avgStrideLength": 118.0,
                           "activityType": {"typeKey": "running"}})
     assert a["cadence"] == 166.4 and a["gct_ms"] == 251.0 and a["vert_ratio"] == 8.1 and a["stride_cm"] == 118.0
+
+
+def _set(category, name, reps, grams, kind="ACTIVE"):
+    return {"setType": kind, "repetitionCount": reps, "weight": grams,
+            "exercises": [{"category": category, "name": name}] if category else []}
+
+
+def test_strength_group_from_name():
+    names = ["Push v3", "Tuesday's Legs", "Friday's Pull", "Legs - Race week (easy)", "Core v2", "Pushkin run", "Gym"]
+    assert [td.strength_group(n) for n in names] == ["push", "legs", "pull", "legs", None, "push", None]
+
+
+def test_summarise_sets_takes_top_weight_and_skips_noise():
+    rows = td.summarise_sets([
+        _set("ROW", "INDOOR_ROW", 110, 0),
+        _set(None, None, None, None, kind="REST"),
+        _set("BENCH_PRESS", "INCLINE_DUMBBELL_BENCH_PRESS", 12, 36000),
+        _set("BENCH_PRESS", "INCLINE_DUMBBELL_BENCH_PRESS", 6, 68000),
+        _set("BENCH_PRESS", "INCLINE_DUMBBELL_BENCH_PRESS", 6, 68000),
+        _set("ROW", "BENT_OVER_ROW_WITH_DUMBELL", 10, 38000),  # a real row, unlike the rowing machine
+        _set("WARM_UP", None, 5, 0),
+        _set("PUSH_UP", "PUSH_UP", 26, 0),
+        _set("PUSH_UP", "PUSH_UP", 16, None),
+    ])
+    assert [r["label"] for r in rows] == ["Incline dumbbell bench press", "Bent over row with dumbbell", "Push up"]
+    incline, row, push_up = rows
+    assert row["top_kg"] == 38.0
+    assert incline["top_kg"] == 68.0 and incline["reps_at_top"] == [6, 6]
+    assert incline["sets"] == 3 and incline["volume_kg"] == 12 * 36 + 2 * 6 * 68
+    assert push_up["top_kg"] == 0 and push_up["max_reps"] == 26
+
+
+class LiftingGarmin(FakeGarmin):
+    def __init__(self):
+        super().__init__()
+        self.set_calls = []
+
+    def get_activities(self, start, limit):
+        if start:
+            return []
+        lift = {"activityType": {"typeKey": "strength_training"}}
+        return [
+            {**lift, "activityId": 10, "activityName": "Push v3", "startTimeLocal": "2026-11-04 05:38:00"},
+            {**lift, "activityId": 11, "activityName": "Legs - Race week (easy)", "startTimeLocal": "2026-11-03 05:40:00"},
+            {**lift, "activityId": 12, "activityName": "Push v2", "startTimeLocal": "2026-10-27 05:37:00"},
+            {**lift, "activityId": 13, "activityName": "Core v2", "startTimeLocal": "2026-10-25 08:00:00"},
+            {**lift, "activityId": 14, "activityName": "Push", "startTimeLocal": "2026-01-01 05:00:00"},  # too old
+            {"activityId": 15, "activityName": "Push the pace", "startTimeLocal": "2026-11-02 07:00:00",
+             "activityType": {"typeKey": "running"}},
+        ]
+
+    def get_activity_exercise_sets(self, activity_id):
+        self.set_calls.append(activity_id)
+        kg = {10: 75000, 11: 45000, 12: 70000}[activity_id]
+        return {"exerciseSets": [_set("BENCH_PRESS", None, 8, kg), _set("BENCH_PRESS", None, 7, kg)]}
+
+
+def test_strength_sessions_and_caching():
+    client = LiftingGarmin()
+    data = make(client)
+    rows = data.build()["strength"]
+    assert [(r["id"], r["group"], r["light"]) for r in rows] == [(12, "push", False), (11, "legs", True), (10, "push", False)]
+    assert rows[-1]["exercises"][0]["top_kg"] == 75.0 and rows[-1]["exercises"][0]["reps_at_top"] == [8, 7]
+    # Sessions older than three days are cached; recent ones are re-read on the next build.
+    data.build()
+    assert sorted(client.set_calls) == [10, 10, 11, 11, 12]
+
+
+def test_strength_page_is_listed():
+    assert tr.PAGES["strength"] == "Strength Progression"

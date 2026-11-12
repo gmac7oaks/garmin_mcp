@@ -223,7 +223,7 @@
       if (se.width !== 0) s += `<path d="${path}" fill="none" stroke="${se.color}" stroke-width="${se.width || 1.8}"/>`;
       if (se.dots) se.vals.forEach((v, i) => { if (v != null) s += `<circle cx="${X(i)}" cy="${Y(v)}" r="2.4" fill="${se.color}"/>`; });
     });
-    (o.labels || []).forEach((l, i) => { if (l) s += `<text x="${X(i)}" y="${o.h - 3}" font-size="9" text-anchor="middle" fill="${o.text}">${l}</text>`; });
+    (o.labels || []).forEach((l, i) => { if (l) s += `<text x="${X(i)}" y="${o.h - 3}" font-size="9" text-anchor="${i === n - 1 && n > 1 ? "end" : "middle"}" fill="${o.text}">${l}</text>`; });
     return s + "</svg>";
   };
 
