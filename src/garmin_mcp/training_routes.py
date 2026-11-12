@@ -39,6 +39,7 @@ PAGES = {
     "fuel": "Fuel vs Training",
     "form": "Running Form",
     "planner": "Block Planner",
+    "strength": "Strength Progression",
 }
 _NAME = re.compile(r"^[a-z]+$")
 

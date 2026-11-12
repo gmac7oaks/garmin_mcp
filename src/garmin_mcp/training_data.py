@@ -17,6 +17,7 @@ REFRESH_HOURS (UK time, following BST) and on demand.
 import datetime
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -31,6 +32,10 @@ FOOD_DAYS = 28  # food logs, one request per day (older days are cached)
 WEIGHT_DAYS = 120
 CALENDAR_AHEAD_DAYS = 210
 PREDICTION_DAYS = 120  # races on the Garmin calendar
+STRENGTH_DAYS = 182  # Push / Pull / Legs sessions for the progression page
+STRENGTH_GROUPS = (("push", "push"), ("pull", "pull"), ("legs", "leg"))  # group, word in activity name
+_SKIP_CATEGORIES = {"UNKNOWN", "WARM_UP", "CARDIO", "RUN", "INDOOR_BIKE"}
+_SKIP_EXERCISES = {"INDOOR_ROW", "ROWING_MACHINE"}  # warm-ups logged as sets
 REFRESH_HOURS = (7, 13, 20)  # UK local time; override with TRAINING_REFRESH_HOURS="7,13,20"
 
 
@@ -129,6 +134,49 @@ def _bb_day(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def strength_group(name: str) -> Optional[str]:
+    """push / pull / legs from an activity name such as "Push v3" or "Tuesday's Legs"."""
+    words = re.findall(r"[a-z]+", (name or "").lower())
+    for group, stem in STRENGTH_GROUPS:
+        if any(w.startswith(stem) for w in words):
+            return group
+    return None
+
+
+def _exercise_label(category: str, name: Optional[str]) -> str:
+    text = (name or category or "?").replace("DUMBELL", "DUMBBELL").replace("_", " ").lower()
+    return text[:1].upper() + text[1:]
+
+
+def summarise_sets(sets: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row per exercise: heaviest weight, reps at it, sets, volume. Order of first appearance."""
+    rows: Dict[str, Dict[str, Any]] = {}
+    for s in sets or []:
+        if s.get("setType") != "ACTIVE" or not s.get("exercises"):
+            continue
+        ex = s["exercises"][0] or {}
+        category = ex.get("category") or "UNKNOWN"
+        if category in _SKIP_CATEGORIES or ex.get("name") in _SKIP_EXERCISES:
+            continue
+        reps = s.get("repetitionCount") or 0
+        if reps <= 0:
+            continue
+        kg = round((s.get("weight") or 0) / 1000, 2)
+        key = f"{category}/{ex.get('name') or ''}"
+        row = rows.setdefault(key, {
+            "key": key, "label": _exercise_label(category, ex.get("name")),
+            "top_kg": 0.0, "reps_at_top": [], "sets": 0, "volume_kg": 0.0, "max_reps": 0,
+        })
+        row["sets"] += 1
+        row["volume_kg"] = round(row["volume_kg"] + kg * reps, 1)
+        row["max_reps"] = max(row["max_reps"], reps)
+        if kg > row["top_kg"]:
+            row["top_kg"], row["reps_at_top"] = kg, [reps]
+        elif kg == row["top_kg"]:
+            row["reps_at_top"].append(reps)
+    return list(rows.values())
+
+
 class TrainingData:
     """Builds and caches the dashboard dataset."""
 
@@ -152,6 +200,7 @@ class TrainingData:
         self._build_lock = threading.Lock()
         self._scheduler: Optional[threading.Thread] = None
         self._food_cache: Dict[str, Dict[str, Any]] = {}
+        self._sets_cache: Dict[Any, List[Dict[str, Any]]] = {}
 
     # ----- fetching -------------------------------------------------------
 
@@ -400,6 +449,37 @@ class TrainingData:
         out.sort(key=lambda r: r["date"] or "")
         return out
 
+    def strength(self, activities: List[Dict[str, Any]], day: datetime.date) -> List[Dict[str, Any]]:
+        """Push / Pull / Legs sessions with a per-exercise summary, oldest first.
+
+        Exercise sets are fetched once per activity; the last three days are re-read
+        in case sets were edited after the session.
+        """
+        first = (day - datetime.timedelta(days=STRENGTH_DAYS - 1)).isoformat()
+        recent = (day - datetime.timedelta(days=3)).isoformat()
+        out = []
+        for a in activities or []:
+            date = str(a.get("start") or "")[:10]
+            group = strength_group(a.get("name") or "")
+            if a.get("sport") != "lift" or not group or date < first or a.get("id") is None:
+                continue
+            rows = self._sets_cache.get(a["id"]) if date < recent else None
+            if rows is None:
+                try:
+                    data = self._client.get_activity_exercise_sets(a["id"]) or {}
+                except Exception as exc:
+                    logger.info("exercise sets for %s unavailable: %s", a["id"], exc)
+                    continue
+                rows = summarise_sets(data.get("exerciseSets") or [])
+                if date < recent:
+                    self._sets_cache[a["id"]] = rows
+            if rows:
+                name = a.get("name") or ""
+                light = bool(re.search(r"easy|race week|deload", name, re.I))
+                out.append({"id": a["id"], "date": date, "name": name, "group": group, "light": light, "exercises": rows})
+        out.sort(key=lambda r: r["date"])
+        return out
+
     # ----- building -------------------------------------------------------
 
     def build(self) -> Dict[str, Any]:
@@ -421,6 +501,7 @@ class TrainingData:
             ("energy", lambda: self.energy(day - datetime.timedelta(days=ENERGY_DAYS - 1), day)),
             ("food", lambda: self.food(day - datetime.timedelta(days=FOOD_DAYS - 1), day)),
             ("weight", lambda: self.weight(day - datetime.timedelta(days=WEIGHT_DAYS - 1), day)),
+            ("strength", lambda: self.strength(doc.get("activities") or [], day)),
         ]
         doc: Dict[str, Any] = {"errors": {}}
         for name, fetch in sections:
