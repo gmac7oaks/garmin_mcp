@@ -359,3 +359,49 @@ def test_strength_sessions_and_caching():
 
 def test_strength_page_is_listed():
     assert tr.PAGES["strength"] == "Strength Progression"
+
+
+SHARE = "coach-view-only"
+
+
+class FullDoc(StubData):
+    def get(self, refresh=False):
+        self.refreshes.append(refresh)
+        return {"activities": [{"id": 1}], "sleep": [{"date": "2026-11-05"}], "weight": [{"kg": 84}],
+                "strength": [{"date": "2026-11-04", "group": "push"}], "date": "2026-11-05",
+                "updated": "2026-11-05T07:00:00+00:00", "errors": {"food": "x", "strength": "y"}}
+
+
+def share_client(data):
+    fastmcp = FastMCP("test")
+    tr.register_training_routes(fastmcp, FakeGarmin(), TOKEN, data=data, share_token=SHARE)
+    return TestClient(fastmcp.streamable_http_app())
+
+
+def test_share_key_opens_only_the_strength_page():
+    c = share_client(FullDoc())
+    assert c.get(f"/training/strength?key={SHARE}").status_code == 200
+    for path in ("/training/coach", "/training/fuel", "/training/", "/training/nope"):
+        assert c.get(f"{path}?key={SHARE}").status_code == 401, path
+    # The owner key still opens everything.
+    assert c.get(f"/training/fuel?key={TOKEN}").status_code == 200
+
+
+def test_share_key_data_is_strength_only_and_cannot_refresh():
+    data = FullDoc()
+    c = share_client(data)
+    doc = c.get(f"/training/data.json?key={SHARE}&refresh=1").json()
+    assert doc["strength"] == [{"date": "2026-11-04", "group": "push"}]
+    assert doc["activities"] == [] and "sleep" not in doc and "weight" not in doc
+    assert doc["errors"] == {"strength": "y"} and doc["shared"] is True
+    full = c.get(f"/training/data.json?key={TOKEN}").json()
+    assert full["sleep"] and full["weight"]
+    assert data.refreshes == [False, False]
+
+
+def test_share_token_must_differ_and_is_optional():
+    import pytest
+    with pytest.raises(ValueError):
+        tr.register_training_routes(FastMCP("t"), FakeGarmin(), TOKEN, data=StubData(), share_token=TOKEN)
+    c = client(StubData())  # no share token configured
+    assert c.get("/training/strength?key=").status_code == 401
