@@ -921,7 +921,9 @@ def main():
         if training_token:
             from garmin_mcp.training_routes import register_training_routes
 
-            register_training_routes(fastmcp, garmin_client, training_token)
+            register_training_routes(
+                fastmcp, garmin_client, training_token, share_token=os.getenv("TRAINING_SHARE_TOKEN")
+            )
             print("Training dashboards enabled at /training/", file=sys.stderr)
 
         mode = " (stateless)" if stateless_http and transport == "streamable-http" else ""
