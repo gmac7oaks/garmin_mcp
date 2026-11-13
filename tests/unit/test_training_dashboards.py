@@ -405,3 +405,23 @@ def test_share_token_must_differ_and_is_optional():
         tr.register_training_routes(FastMCP("t"), FakeGarmin(), TOKEN, data=StubData(), share_token=TOKEN)
     c = client(StubData())  # no share token configured
     assert c.get("/training/strength?key=").status_code == 401
+
+
+class NamedGarmin(FakeGarmin):
+    def get_full_name(self):
+        return "James Example"
+
+
+def test_athlete_name_comes_from_garmin_unless_configured():
+    assert make(NamedGarmin()).build()["config"]["athlete"] == "James Example"
+    data = td.TrainingData(NamedGarmin(), config={"athlete": "Set Name"}, today=lambda: DAY)
+    assert data.build()["config"]["athlete"] == "Set Name"
+    assert make(FakeGarmin()).build()["config"]["athlete"] is None  # no name method: page shows "Athlete"
+
+
+def test_coach_name_defaults_to_claude(monkeypatch):
+    monkeypatch.delenv("TRAINING_COACH", raising=False)
+    assert tr.config_from_env()["coach"] == "Claude"
+    monkeypatch.setenv("TRAINING_COACH", "Aaron")
+    assert tr.config_from_env()["coach"] == "Aaron"
+    assert "Guy McLaughlin" not in (tr.PAGES_DIR / "coach.html").read_text()
