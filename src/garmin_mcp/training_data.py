@@ -209,6 +209,16 @@ class TrainingData:
             return self._client.connectapi(path, params=params)
         return self._client.connectapi(path)
 
+    def _athlete_name(self) -> Optional[str]:
+        """The account holder's name from Garmin, so shared servers show the right athlete."""
+        if getattr(self, "_athlete", None) is None:
+            try:
+                self._athlete = (self._client.get_full_name() or "").strip()
+            except Exception as exc:
+                logger.info("athlete name unavailable: %s", exc)
+                return None
+        return self._athlete or None
+
     def _display_name(self) -> str:
         name = getattr(self._client, "display_name", None)
         if not name:
@@ -514,6 +524,8 @@ class TrainingData:
         if doc.get("activities") is None:
             raise RuntimeError(f"activities failed: {doc['errors'].get('activities')}")
         doc["config"] = dict(self._config)
+        if not doc["config"].get("athlete"):
+            doc["config"]["athlete"] = self._athlete_name()
         doc["date"] = day.isoformat()
         doc["updated"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
         return doc

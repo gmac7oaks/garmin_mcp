@@ -12,6 +12,8 @@ holds only SHARED_SECTIONS (no sleep, HRV, weight, food etc.). Change or remove
 it to revoke access without touching TRAINING_TOKEN.
 
 Optional settings shown on the pages (environment variables):
+    TRAINING_ATHLETE     athlete name on the Coach page (default: the Garmin account's name)
+    TRAINING_COACH       coach name on the Coach page (default: "Claude")
     TRAINING_GOAL_RACE   name of the goal race, e.g. "Marden 10K"
     TRAINING_GOAL_DATE   YYYY-MM-DD
     TRAINING_BLOCK_START YYYY-MM-DD, first day of the current training block
@@ -58,6 +60,8 @@ def config_from_env() -> Dict[str, object]:
         if week.strip() and label.strip():
             labels[week.strip()] = label.strip()
     return {
+        "athlete": os.getenv("TRAINING_ATHLETE", "").strip() or None,
+        "coach": os.getenv("TRAINING_COACH", "").strip() or "Claude",
         "goal_race": os.getenv("TRAINING_GOAL_RACE", "").strip() or None,
         "goal_date": os.getenv("TRAINING_GOAL_DATE", "").strip() or None,
         "block_start": os.getenv("TRAINING_BLOCK_START", "").strip() or None,
