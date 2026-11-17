@@ -29,7 +29,7 @@ T.boot((D) => {
   document.getElementById("cd").textContent = g.days != null ? Math.max(g.days, 0) : "?";
   document.getElementById("name").textContent = g.name;
   document.getElementById("date").textContent = g.date ? T.dateLabel(g.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "Set TRAINING_GOAL_DATE";
-  const start = T.qs.get("block") || D.cfg.block_start || T.iso(new Date(T.today() - 84 * 86400000));
+  const start = T.qs.get("block") || g.blockStart || T.iso(new Date(T.today() - 84 * 86400000));
   const runs = D.runs.filter((r) => r.date >= start);
   const longest = runs.slice().sort((a, b) => b.distance_m - a.distance_m)[0];
   const stats = [["Block km", (T.sum(runs.map((r) => r.distance_m)) / 1000).toFixed(0)], ["Runs", runs.length],
