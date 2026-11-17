@@ -158,12 +158,22 @@
     return { call, light, reasons };
   };
 
+  // The goal race: ?race=/&date= in the URL, else TRAINING_GOAL_RACE/DATE while that
+  // race is still ahead, else the next race on the Garmin calendar (the training-plan
+  // race first). Once the configured race has passed, the block restarts the day after.
   T.goal = function (doc) {
-    const c = doc.cfg || {};
-    const name = T.qs.get("race") || c.goal_race || "Goal race";
-    const date = T.qs.get("date") || c.goal_date;
+    const c = doc.cfg || {}, today = T.iso(T.today());
+    const events = ((doc.calendar || {}).events || []).filter((e) => e.date >= today);
+    const next = events.find((e) => e.primary) || events.find((e) => e.race);
+    const cfgAhead = c.goal_date && c.goal_date >= today;
+    const stale = !!(c.goal_date && !cfgAhead);
+    const ev = T.qs.get("race") || T.qs.get("date") || cfgAhead ? null : next;
+    const name = T.qs.get("race") || (ev ? ev.title : c.goal_race) || "Goal race";
+    const date = T.qs.get("date") || (ev ? ev.date : c.goal_date);
     const days = date ? T.daysBetween(T.today(), T.d(date)) : null;
-    return { name, date, days };
+    let blockStart = c.block_start;
+    if (stale && (!blockStart || blockStart <= c.goal_date)) blockStart = T.iso(new Date(T.d(c.goal_date).getTime() + DAY));
+    return { name, date, days, km: ev && ev.distance_m ? ev.distance_m / 1000 : null, goal_s: ev ? ev.goal_s : null, blockStart };
   };
 
   // Weekly totals (Monday weeks), newest last.

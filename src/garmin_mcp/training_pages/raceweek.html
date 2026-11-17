@@ -13,12 +13,12 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 4px;b
 .big{font-size:30px;font-weight:700}.muted{color:#6b7280;font-size:12px}
 .pill{display:inline-block;border-radius:99px;padding:3px 10px;font-weight:600;font-size:12px}
 .ok{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e}.bad{background:#fee2e2;color:#991b1b}
-input{font:inherit;width:70px;padding:3px 6px;border:1px solid #d1d5db;border-radius:6px}
+input{font:inherit;width:84px;padding:3px 6px;border:1px solid #d1d5db;border-radius:6px}
 li{margin:4px 0}
 </style></head><body>
 <div class="top"><div><div class="cd" id="cd"></div><div class="cdl">days to go</div></div><div><h1 id="race"></h1><div class="sub" id="when"></div></div></div>
 <div class="grid">
-<div class="card"><h3>Pace plan · goal <input id="goal" value="39:50"></h3><div id="plan"></div></div>
+<div class="card"><h3>Pace plan · goal <input id="goal" placeholder="h:mm:ss"></h3><div id="plan"></div></div>
 <div class="card"><h3>Garmin's prediction</h3><div id="pred"></div></div>
 <div class="card"><h3>Form into race day</h3><div id="form"></div><div class="muted" id="formn"></div></div>
 <div class="card"><h3>Race morning weather</h3><div id="wx">Loading…</div></div>
@@ -27,7 +27,7 @@ li{margin:4px 0}
 </div>
 <script src="common.js"></script>
 <script>
-const sec = (s) => { const [m, x] = String(s).split(":").map(Number); return m * 60 + (x || 0); };
+const sec = (s) => String(s).trim().split(":").map(Number).reduce((t, n) => t * 60 + (n || 0), 0);
 const mmss = (s) => { s = Math.round(s); return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 T.boot((D) => {
   const cal = D.calendar || { events: [], scheduled: [] };
@@ -39,7 +39,11 @@ T.boot((D) => {
   document.getElementById("race").textContent = name;
   document.getElementById("when").textContent = date ? `${T.dateLabel(date, { weekday: "long", day: "numeric", month: "long" })} · ${km} km${ev.location ? " · " + ev.location : ""}` : "Add the race to your Garmin calendar";
   // Pace plan
-  const goalEl = document.getElementById("goal"); goalEl.value = T.qs.get("goal") || goalEl.value;
+  // Goal: ?goal= in the URL, else the goal time set on the race in Garmin, else Garmin's prediction.
+  const rp = D.race_predictions || {}, key = km <= 5.5 ? "5k" : km <= 12 ? "10k" : km <= 25 ? "half" : "marathon", now = rp[key];
+  const goalEl = document.getElementById("goal");
+  goalEl.value = T.qs.get("goal") || (ev.goal_s ? mmss(ev.goal_s) : now ? mmss(now) : "");
+  if (!goalEl.value) goalEl.value = mmss(km * 300);
   const plan = () => {
     const tot = sec(goalEl.value), p = tot / km; let rows = "", cum = 0;
     for (let k = 1; k <= Math.ceil(km); k++) { const d = Math.min(1, km - k + 1); cum += p * d; rows += `<tr><td>Km ${k}${d < 1 ? ` (${d.toFixed(2)})` : ""}</td><td>${mmss(p)}</td><td>${mmss(cum)}</td></tr>`; }
@@ -47,7 +51,6 @@ T.boot((D) => {
   };
   goalEl.oninput = plan; plan();
   // Prediction
-  const rp = D.race_predictions || {}, key = km <= 5.5 ? "5k" : km <= 12 ? "10k" : km <= 25 ? "half" : "marathon", now = rp[key];
   if (now) {
     const target = sec(goalEl.value), gap = target - now, cls = gap >= 0 ? "ok" : gap > -30 ? "warn" : "bad";
     const hist = (rp.history || []).filter((h) => h[key]);
@@ -83,7 +86,7 @@ T.boot((D) => {
     .then((r) => r.json()).then((w) => {
       const h = w.hourly, rows = [hour - 1, hour, hour + 1].filter((i) => h.time[i]).map((i) => `<tr><td>${h.time[i].slice(11)}</td><td>${Math.round(h.temperature_2m[i])}°C (feels ${Math.round(h.apparent_temperature[i])}°C)</td><td>${h.precipitation_probability[i]}% rain</td><td>${Math.round(h.wind_speed_10m[i])} mph</td></tr>`).join("");
       const t = h.temperature_2m[hour];
-      document.getElementById("wx").innerHTML = `<table><tr><th>Time</th><th>Temp</th><th>Rain</th><th>Wind</th></tr>${rows}</table><div class="muted">${t < 8 ? "Cold: arm warmers or a throwaway top for the start." : t > 16 ? "Warm for racing: take water early." : "Good racing temperature."} Forecast from Open-Meteo for Marden.</div>`;
+      document.getElementById("wx").innerHTML = `<table><tr><th>Time</th><th>Temp</th><th>Rain</th><th>Wind</th></tr>${rows}</table><div class="muted">${t < 8 ? "Cold: arm warmers or a throwaway top for the start." : t > 16 ? "Warm for racing: take water early." : "Good racing temperature."} Forecast from Open-Meteo.</div>`;
     }).catch(() => { document.getElementById("wx").textContent = "Weather forecast unavailable."; });
 });
 </script></body></html>

@@ -392,6 +392,7 @@ class TrainingData:
                         "primary": bool(item.get("primaryEvent")),
                         "distance_m": target.get("value") * unit if unit and isinstance(target.get("value"), (int, float)) else None,
                         "location": item.get("location"),
+                        "goal_s": self._event_goal(item) if item.get("isRace") or item.get("primaryEvent") else None,
                     })
                 elif item.get("itemType") == "workout" and date <= (day + datetime.timedelta(days=21)).isoformat():
                     scheduled.append({"date": date, "title": item.get("title"), "sport": (item.get("sportTypeKey") or "")})
@@ -399,6 +400,22 @@ class TrainingData:
         events.sort(key=lambda e: e["date"])
         scheduled.sort(key=lambda w: w["date"])
         return {"events": events, "scheduled": scheduled}
+
+    def _event_goal(self, item: Dict[str, Any]) -> Optional[float]:
+        """The goal time (seconds) set on a Garmin calendar race, if any."""
+        event_id = item.get("id")
+        if not isinstance(event_id, (int, str)) or isinstance(event_id, bool):
+            return None
+        try:
+            detail = self._client.connectapi(f"/calendar-service/event/{event_id}") or {}
+        except Exception as exc:
+            logger.info("event goal unavailable for %s: %s", event_id, exc)
+            return None
+        goal = ((detail.get("eventCustomization") or {}).get("customGoal") or {}) if isinstance(detail, dict) else {}
+        value = goal.get("value")
+        if goal.get("unitType") != "time" or goal.get("unit") != "second" or not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        return float(value)
 
     def energy(self, first: datetime.date, last: datetime.date) -> List[Dict[str, Any]]:
         out = []

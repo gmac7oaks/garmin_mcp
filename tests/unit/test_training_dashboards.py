@@ -71,6 +71,9 @@ class FakeGarmin:
         if "stress" in path:
             self._check("stress")
             return [{"calendarDate": "2026-11-05", "values": {"overallStressLevel": 28}}]
+        if "calendar-service/event/1" in path:
+            self._check("event")
+            return {"eventCustomization": {"customGoal": {"value": 2390.0, "unit": "second", "unitType": "time"}}}
         if "heartRateZones" in path:
             self._check("hr_zones")
             return []
@@ -273,7 +276,7 @@ def test_new_sections():
     assert rp["10k"] == 2349 and len(rp["history"]) == 2
     cal = doc["calendar"]
     assert cal["events"] == [{"title": "Marden 10km", "date": "2026-11-15", "race": True, "primary": True,
-                              "distance_m": 10000.0, "location": None}]
+                              "distance_m": 10000.0, "location": None, "goal_s": 2390.0}]
     assert [w["title"] for w in cal["scheduled"]] == ["Easy 40"]
     assert doc["energy"][0]["total"] == 2900
     assert len(doc["food"]) == td.FOOD_DAYS and doc["food"][-1]["protein"] == 170
@@ -425,3 +428,19 @@ def test_coach_name_defaults_to_claude(monkeypatch):
     monkeypatch.setenv("TRAINING_COACH", "Aaron")
     assert tr.config_from_env()["coach"] == "Aaron"
     assert "Guy McLaughlin" not in (tr.PAGES_DIR / "coach.html").read_text()
+
+def test_race_goal_missing_or_broken_is_none():
+    client = FakeGarmin()
+    client.connectapi = lambda path, params=None: {"eventCustomization": {"customGoal": {"value": 3, "unit": "kilometer", "unitType": "distance"}}}
+    assert make(client)._event_goal({"id": 1}) is None
+    def boom(path, params=None):
+        raise RuntimeError("down")
+    client.connectapi = boom
+    assert make(client)._event_goal({"id": 1}) is None
+    assert make(client)._event_goal({}) is None
+
+
+def test_raceweek_page_uses_garmin_goal_not_a_fixed_time():
+    page = (td.__file__.rsplit("/", 1)[0] + "/training_pages/raceweek.html")
+    html = open(page).read()
+    assert 'value="39:50"' not in html and "ev.goal_s" in html
